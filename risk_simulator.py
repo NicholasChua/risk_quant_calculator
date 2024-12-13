@@ -72,6 +72,7 @@ def _validate_simulation_params(**kwargs) -> None:
         - kurtosis: Must be positive
         - num_simulations: Must be positive
         - monte_carlo_seed: Must be positive
+        - cost_of_controls: Must be positive
         - plot: Must be boolean
 
     Args:
@@ -91,6 +92,7 @@ def _validate_simulation_params(**kwargs) -> None:
         "kurtosis": (lambda x: x >= 0, "must be a positive value"),
         "num_simulations": (lambda x: x > 0, "must be a positive value"),
         "monte_carlo_seed": (lambda x: x > 0, "must be a positive value"),
+        "cost_of_controls": (lambda x: x >= 0, "must be a positive value"),
         "plot": (lambda x: isinstance(x, bool), "must be a boolean value"),
     }
 
@@ -306,6 +308,7 @@ def plot_risk_calculation_with_controls(
     exposure_factor: float,
     annual_rate_of_occurrence: float,
     reduction_percentage: float,
+    cost_of_controls: float,
     plot=True,
     monte_carlo_seed: int = MONTE_CARLO_SEED,
     num_simulations: int = NUM_SIMULATIONS,
@@ -337,6 +340,7 @@ def plot_risk_calculation_with_controls(
         exposure_factor: The percentage of the asset value that is at risk during a risk event, expressed as a decimal.
         annual_rate_of_occurrence: The frequency of the risk event over a year, expressed as a decimal.
         reduction_percentage: The percentage reduction in the ARO after applying risk controls, expressed as a percentage.
+        cost_of_controls: The cost of implementing the risk controls, expressed in monetary units.
         plot: A boolean indicating whether to plot the results (default is True).
         monte_carlo_seed: The seed for the Monte Carlo simulation to ensure reproducibility (default is constant MONTE_CARLO_SEED).
         num_simulations: The number of simulations to run for the Monte Carlo analysis (default is constant NUM_SIMULATIONS).
@@ -351,6 +355,7 @@ def plot_risk_calculation_with_controls(
         reduction_percentage=reduction_percentage,
         annual_rate_of_occurrence=annual_rate_of_occurrence,
         asset_value=asset_value,
+        cost_of_controls=cost_of_controls,
         kurtosis=kurtosis,
         num_simulations=num_simulations,
         monte_carlo_seed=monte_carlo_seed,
@@ -421,6 +426,13 @@ def plot_risk_calculation_with_controls(
     expected_loss_before = np.mean(losses)
     expected_loss_after = np.mean(adjusted_losses)
     expected_reduction_in_loss = expected_loss_before - expected_loss_after
+
+    # Calculate ROSI
+    benefit = expected_reduction_in_loss
+    if cost_of_controls > 0:
+        rosi_percentage = (benefit - cost_of_controls) / cost_of_controls * 100
+    else:
+        rosi_percentage = float('inf')
 
     # For after controls, 2.5% percentile is likely to be zero due to the reduction
     # Calculate the first non-zero percentile and value to show in the table instead
@@ -583,7 +595,9 @@ def plot_risk_calculation_with_controls(
                 "-------------------------------",
                 f"ARO after {reduction_percentage:.0f}% reduction: {adjusted_ARO:.2f}",
                 f"Annualized Loss Expectancy (ALE): ${annualized_loss_expectancy * (1 - reduction_percentage/100):,.2f}",
-                f"Controls Max Cost: ${expected_reduction_in_loss:,.2f}",
+                f"Expected Benefit: ${benefit:,.2f}",
+                f"Cost of Controls: ${cost_of_controls:,.2f}",
+                f"ROSI: {rosi_percentage:,.2f}%",
             ]
         )
 
@@ -676,8 +690,10 @@ def plot_risk_calculation_with_controls(
                 "adjusted_ale": round(
                     annualized_loss_expectancy * (1 - reduction_percentage / 100), 2
                 ),
-                "expected_reduction_in_loss": round(expected_reduction_in_loss, 2),
                 "reduction_percentage": round(reduction_percentage, 2),
+                "expected_benefit": round(benefit, 2),
+                "cost_of_controls": round(cost_of_controls, 2),
+                "rosi_percentage": round(rosi_percentage, 2),
             },
             "simulation_results": {
                 "losses": losses.tolist(),
@@ -690,22 +706,23 @@ def plot_risk_calculation_with_controls(
 
 def main():
     # Get user inputs
-    AV = float(input("Enter the Asset Value (AV): "))
-    EF = float(input("Enter the Exposure Factor (EF) between 0 and 1: "))
-    ARO = float(input("Enter the Annual Rate of Occurrence (ARO): "))
-    reduction_percentage = float(
-        input("Enter the Percentage reduction after controls (%): ")
-    )
+    # AV = float(input("Enter the Asset Value (AV): "))
+    # EF = float(input("Enter the Exposure Factor (EF) between 0 and 1: "))
+    # ARO = float(input("Enter the Annual Rate of Occurrence (ARO): "))
+    # reduction_percentage = float(
+    #     input("Enter the Percentage reduction after controls (%): ")
+    # )
+    # control_cost = float(input("Enter the cost of implementing controls: "))
 
     # Hardcoded inputs for testing
-    # AV, EF, ARO, reduction_percentage = 100000, 0.5, 5, 80
+    AV, EF, ARO, reduction_percentage, control_cost = 100000, 0.5, 5, 80, 10000
 
     # Plot the risk calculation with controls
     test = plot_risk_calculation_with_controls(
-        AV, EF, ARO, reduction_percentage, plot=False
+        AV, EF, ARO, reduction_percentage, control_cost, plot=True
     )
-    with open("risk_simulation_results.json", "w") as f:
-        json.dump(test, f, indent=4)
+    # with open("risk_simulation_results.json", "w") as f:
+    #     json.dump(test, f, indent=4)
 
 
 if __name__ == "__main__":
