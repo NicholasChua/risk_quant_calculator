@@ -7,6 +7,7 @@ import json
 MONTE_CARLO_SEED = 42
 NUM_SIMULATIONS = 10000
 KURTOSIS = 1.7  # Default value is 3
+CURRENCY_SYMBOL = "\\$"
 
 
 def get_beta_parameters_for_kurtosis(kurtosis: int) -> tuple[float, float]:
@@ -109,6 +110,7 @@ def plot_risk_calculation(
     monte_carlo_seed: int = MONTE_CARLO_SEED,
     num_simulations: int = NUM_SIMULATIONS,
     kurtosis: int = KURTOSIS,
+    currency_symbol: str = CURRENCY_SYMBOL,
 ) -> None | dict:
     """Estimate the mean loss and the effectiveness of risk controls using Monte Carlo simulations for one scenario. This function simulates the potential losses to an asset based on a given exposure factor (EF) and annual rate of occurrence (ARO) for a specific asset value (AV). It provides a risk distribution and a loss exceedance curve. The statistics and simulation results are either plotted or returned as a dictionary.
 
@@ -122,6 +124,7 @@ def plot_risk_calculation(
         monte_carlo_seed: The seed for the Monte Carlo simulation to ensure reproducibility (default is constant MONTE_CARLO_SEED).
         num_simulations: The number of simulations to run for the Monte Carlo analysis (default is constant NUM_SIMULATIONS).
         kurtosis: The kurtosis value to adjust the shape of the beta distribution for the EF (default is constant KURTOSIS).
+        currency_symbol: The currency symbol to use in the plot displays. (default is constant CURRENCY_SYMBOL).
 
     Returns:
         dict | None: A dictionary containing the statistics, input parameters, and simulation results if plot is False. If plot is True, the function displays the visualizations and tables without returning a dictionary.
@@ -198,7 +201,7 @@ def plot_risk_calculation(
             plt.FuncFormatter(lambda x, p: format(int(x), ","))
         )
         ax1.xaxis.set_major_formatter(
-            plt.FuncFormatter(lambda x, p: f'${format(int(x), ",")}')
+            plt.FuncFormatter(lambda x, p: f'{currency_symbol}{format(int(x), ",")}')
         )
 
         ax1.set_title("Risk Distribution")
@@ -212,7 +215,7 @@ def plot_risk_calculation(
 
         # Format axes
         ax2.xaxis.set_major_formatter(
-            plt.FuncFormatter(lambda x, p: f'${format(int(x), ",")}')
+            plt.FuncFormatter(lambda x, p: f'{currency_symbol}{format(int(x), ",")}')
         )
         ax2.yaxis.set_major_formatter(
             plt.FuncFormatter(lambda y, _: "{:.0f}%".format(y))
@@ -229,13 +232,13 @@ def plot_risk_calculation(
             [
                 "Statistical Summary",
                 "-------------------",
-                f'Mean: ${calc_stats["Mean"]:,.2f}',
-                f'Median: ${calc_stats["Median"]:,.2f}',
-                f'Mode: ${calc_stats["Mode"]:,.2f}',
-                f'Std Dev: ${calc_stats["Std Dev"]:,.2f}',
-                f'1st Percentile: ${calc_stats["1st Percentile"]:,.2f}',
-                f'95% CI: ${calc_stats["2.5th Percentile"]:,.2f} - ${calc_stats["97.5th Percentile"]:,.2f}',
-                f'99th Percentile: ${calc_stats["99th Percentile"]:,.2f}',
+                f'Mean: {currency_symbol}{calc_stats["Mean"]:,.2f}',
+                f'Median: {currency_symbol}{calc_stats["Median"]:,.2f}',
+                f'Mode: {currency_symbol}{calc_stats["Mode"]:,.2f}',
+                f'Std Dev: {currency_symbol}{calc_stats["Std Dev"]:,.2f}',
+                f'1st Percentile: {currency_symbol}{calc_stats["1st Percentile"]:,.2f}',
+                f'95% CI: {currency_symbol}{calc_stats["2.5th Percentile"]:,.2f} - {currency_symbol}{calc_stats["97.5th Percentile"]:,.2f}',
+                f'99th Percentile: {currency_symbol}{calc_stats["99th Percentile"]:,.2f}',
             ]
         )
 
@@ -244,11 +247,11 @@ def plot_risk_calculation(
             [
                 "Input Parameters",
                 "----------------",
-                f"Asset Value (AV): ${asset_value:,.2f}",
+                f"Asset Value (AV): {currency_symbol}{asset_value:,.2f}",
                 f"Exposure Factor (EF): {exposure_factor:.2%}",
                 f"Annualized Rate of Occurrence (ARO): {annual_rate_of_occurrence:.2f}",
-                f"Single Loss Expectancy (SLE): ${single_loss_expectancy:,.2f}",
-                f"Annualized Loss Expectancy (ALE): ${annualized_loss_expectancy:,.2f}",
+                f"Single Loss Expectancy (SLE): {currency_symbol}{single_loss_expectancy:,.2f}",
+                f"Annualized Loss Expectancy (ALE): {currency_symbol}{annualized_loss_expectancy:,.2f}",
             ]
         )
 
@@ -313,6 +316,7 @@ def plot_risk_calculation_with_controls(
     monte_carlo_seed: int = MONTE_CARLO_SEED,
     num_simulations: int = NUM_SIMULATIONS,
     kurtosis: int = KURTOSIS,
+    currency_symbol: str = CURRENCY_SYMBOL,
 ) -> None | dict:
     """Estimate the mean loss and the effectiveness of risk controls using Monte Carlo simulations for a before-and-after scenario.
 
@@ -345,6 +349,7 @@ def plot_risk_calculation_with_controls(
         monte_carlo_seed: The seed for the Monte Carlo simulation to ensure reproducibility (default is constant MONTE_CARLO_SEED).
         num_simulations: The number of simulations to run for the Monte Carlo analysis (default is constant NUM_SIMULATIONS).
         kurtosis: The kurtosis value to adjust the shape of the beta distribution for the EF (default is constant KURTOSIS).
+        currency_symbol: The currency symbol to use in the plot displays. (default is constant CURRENCY_SYMBOL).
 
     Returns:
         dict | None: A dictionary containing the statistics, input parameters, calculated parameters, and simulation results if plot is False. If plot is True, the function displays the visualizations and tables without returning a dictionary.
@@ -486,14 +491,14 @@ def plot_risk_calculation_with_controls(
         )
 
         # Disable scientific notation for Risk Distribution
+        ax1.xaxis.set_major_formatter(
+            plt.FuncFormatter(lambda x, p: f'{currency_symbol}{format(int(x), ",")}')
+        )
         ax1.yaxis.set_major_formatter(
             plt.FuncFormatter(lambda x, p: format(int(x), ","))
         )
-        ax1.xaxis.set_major_formatter(
-            plt.FuncFormatter(lambda x, p: f'${format(int(x), ",")}')
-        )
 
-        ax1.set_title("Risk Distribution")
+        ax1.set_title(f"Risk Distribution over {num_simulations} Simulations")
         ax1.set_xlabel("Total Loss")
         ax1.set_ylabel("Frequency")
         ax1.legend()
@@ -510,7 +515,7 @@ def plot_risk_calculation_with_controls(
 
         # Format Loss Exceedance Curve axes as non-scientific notation
         ax2.xaxis.set_major_formatter(
-            plt.FuncFormatter(lambda x, p: f'${format(int(x), ",")}')
+            plt.FuncFormatter(lambda x, p: f'{currency_symbol}{format(int(x), ",")}')
         )
         ax2.yaxis.set_major_formatter(
             plt.FuncFormatter(lambda y, _: "{:.0f}%".format(y))
@@ -532,44 +537,44 @@ def plot_risk_calculation_with_controls(
             [
                 "Statistical Summary (Before Controls)",
                 "-------------------------------------",
-                f'Mean: ${calc_stats["Mean"]:,.2f}',
-                f'Median: ${calc_stats["Median"]:,.2f}',
-                f'Mode: ${calc_stats["Mode"]:,.2f}',
-                f'Std Dev: ${calc_stats["Std Dev"]:,.2f}',
-                f'1st Percentile: ${calc_stats["1st Percentile"]:,.2f}',
-                f'95% CI: ${calc_stats["2.5th Percentile"]:,.2f} - ${calc_stats["97.5th Percentile"]:,.2f}',
-                f'99th Percentile: ${calc_stats["99th Percentile"]:,.2f}',
+                f'Mean: {currency_symbol}{calc_stats["Mean"]:,.2f}',
+                f'Median: {currency_symbol}{calc_stats["Median"]:,.2f}',
+                f'Mode: {currency_symbol}{calc_stats["Mode"]:,.2f}',
+                f'Std Dev: {currency_symbol}{calc_stats["Std Dev"]:,.2f}',
+                f'1st Percentile: {currency_symbol}{calc_stats["1st Percentile"]:,.2f}',
+                f'95% CI: {currency_symbol}{calc_stats["2.5th Percentile"]:,.2f} - {currency_symbol}{calc_stats["97.5th Percentile"]:,.2f}',
+                f'99th Percentile: {currency_symbol}{calc_stats["99th Percentile"]:,.2f}',
             ]
         )
 
         after_controls_lines = [
             "Statistical Summary (After Controls)",
             "------------------------------------",
-            f'Mean: ${calc_adjusted_stats["Mean"]:,.2f}',
-            f'Median: ${calc_adjusted_stats["Median"]:,.2f}',
-            f'Mode: ${calc_adjusted_stats["Mode"]:,.2f}',
-            f'Std Dev: ${calc_adjusted_stats["Std Dev"]:,.2f}',
+            f'Mean: {currency_symbol}{calc_adjusted_stats["Mean"]:,.2f}',
+            f'Median: {currency_symbol}{calc_adjusted_stats["Median"]:,.2f}',
+            f'Mode: {currency_symbol}{calc_adjusted_stats["Mode"]:,.2f}',
+            f'Std Dev: {currency_symbol}{calc_adjusted_stats["Std Dev"]:,.2f}',
         ]
 
         # Conditionally add the 1st percentile if it is non-zero (otherwise use the first non-zero value)
         if calc_adjusted_stats["1st Percentile"] > 0:
             after_controls_lines.append(
-                f'1st Percentile: ${calc_adjusted_stats["1st Percentile"]:,.2f}'
+                f'1st Percentile: {currency_symbol}{calc_adjusted_stats["1st Percentile"]:,.2f}'
             )
             after_controls_lines.append(
-                f'CI 95%: ${calc_adjusted_stats["2.5th Percentile"]:,.2f} - ${calc_adjusted_stats["97.5th Percentile"]:,.2f}'
+                f'CI 95%: {currency_symbol}{calc_adjusted_stats["2.5th Percentile"]:,.2f} - {currency_symbol}{calc_adjusted_stats["97.5th Percentile"]:,.2f}'
             )
         else:
             after_controls_lines.append(
-                f'{calc_adjusted_stats["First Non-Zero Percentile"]:.1f}th Percentile: ${calc_adjusted_stats["First Non-Zero Value"]:,.2f}'
+                f'{calc_adjusted_stats["First Non-Zero Percentile"]:.1f}th Percentile: {currency_symbol}{calc_adjusted_stats["First Non-Zero Value"]:,.2f}'
             )
             after_controls_lines.append(
-                f'CI {calc_adjusted_stats["First Non-Zero Percentile"]:.1f}%-95%: ${calc_adjusted_stats["First Non-Zero Value"]:,.2f} - ${calc_adjusted_stats["97.5th Percentile"]:,.2f}'
+                f'CI {calc_adjusted_stats["First Non-Zero Percentile"]:.1f}%-95%: {currency_symbol}{calc_adjusted_stats["First Non-Zero Value"]:,.2f} - {currency_symbol}{calc_adjusted_stats["97.5th Percentile"]:,.2f}'
             )
 
         after_controls_lines.extend(
             [
-                f'99th Percentile: ${calc_adjusted_stats["99th Percentile"]:,.2f}',
+                f'99th Percentile: {currency_symbol}{calc_adjusted_stats["99th Percentile"]:,.2f}',
             ]
         )
 
@@ -580,11 +585,11 @@ def plot_risk_calculation_with_controls(
             [
                 "Input Parameters (Before Controls)",
                 "--------------------------------",
-                f"Asset Value (AV): ${asset_value:,.2f}",
+                f"Asset Value (AV): {currency_symbol}{asset_value:,.2f}",
                 f"Exposure Factor (EF): {exposure_factor:.2%}",
                 f"Annualized Rate of Occurrence (ARO): {annual_rate_of_occurrence:.2f}",
-                f"Single Loss Expectancy (SLE): ${single_loss_expectancy:,.2f}",
-                f"Annualized Loss Expectancy (ALE): ${annualized_loss_expectancy:,.2f}",
+                f"Single Loss Expectancy (SLE): {currency_symbol}{single_loss_expectancy:,.2f}",
+                f"Annualized Loss Expectancy (ALE): {currency_symbol}{annualized_loss_expectancy:,.2f}",
             ]
         )
 
@@ -594,9 +599,9 @@ def plot_risk_calculation_with_controls(
                 "Calculated Parameters (After Controls)",
                 "-------------------------------",
                 f"ARO after {reduction_percentage:.0f}% reduction: {adjusted_ARO:.2f}",
-                f"Annualized Loss Expectancy (ALE): ${annualized_loss_expectancy * (1 - reduction_percentage/100):,.2f}",
-                f"Expected Benefit: ${benefit:,.2f}",
-                f"Cost of Controls: ${cost_of_controls:,.2f}",
+                f"Annualized Loss Expectancy (ALE): {currency_symbol}{annualized_loss_expectancy * (1 - reduction_percentage/100):,.2f}",
+                f"Expected Benefit: {currency_symbol}{benefit:,.2f}",
+                f"Cost of Controls: {currency_symbol}{cost_of_controls:,.2f}",
                 f"ROSI: {rosi_percentage:,.2f}%",
             ]
         )
@@ -706,23 +711,23 @@ def plot_risk_calculation_with_controls(
 
 def main():
     # Get user inputs
-    # AV = float(input("Enter the Asset Value (AV): "))
-    # EF = float(input("Enter the Exposure Factor (EF) between 0 and 1: "))
-    # ARO = float(input("Enter the Annual Rate of Occurrence (ARO): "))
-    # reduction_percentage = float(
-    #     input("Enter the Percentage reduction after controls (%): ")
-    # )
-    # control_cost = float(input("Enter the cost of implementing controls: "))
+    AV = float(input("Enter the Asset Value (AV): "))
+    EF = float(input("Enter the Exposure Factor (EF) between 0 and 1: "))
+    ARO = float(input("Enter the Annual Rate of Occurrence (ARO): "))
+    reduction_percentage = float(
+        input("Enter the Percentage reduction after controls (%): ")
+    )
+    control_cost = float(input("Enter the cost of implementing controls: "))
 
     # Hardcoded inputs for testing
-    AV, EF, ARO, reduction_percentage, control_cost = 100000, 0.5, 5, 80, 10000
+    # AV, EF, ARO, reduction_percentage, control_cost = 100000, 0.5, 5, 80, 10000
 
     # Plot the risk calculation with controls
     test = plot_risk_calculation_with_controls(
         AV, EF, ARO, reduction_percentage, control_cost, plot=True
     )
-    # with open("risk_simulation_results.json", "w") as f:
-    #     json.dump(test, f, indent=4)
+    with open("risk_simulation_results.json", "w") as f:
+        json.dump(test, f, indent=4)
 
 
 if __name__ == "__main__":
