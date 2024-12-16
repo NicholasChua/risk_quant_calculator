@@ -132,6 +132,206 @@ def calculate_var(
     return var_values
 
 
+def _simulate_losses(
+    asset_value: float,
+    exposure_factor: float,
+    annual_rate_of_occurrence: float,
+    num_simulations: int,
+    kurtosis: int,
+) -> tuple[np.ndarray, np.ndarray, float, float]:
+    """Helper function to simulate losses using Monte Carlo simulation.
+
+    Args:
+        asset_value: The value of the asset at risk
+        exposure_factor: The percentage of asset value at risk
+        annual_rate_of_occurrence: The frequency of the risk event
+        num_simulations: Number of simulations to run
+        kurtosis: Kurtosis value for beta distribution
+
+    Returns:
+        tuple containing:
+        - simulated losses array
+        - simulated EF array
+        - single loss expectancy
+        - annualized loss expectancy
+    """
+    # Calculate SLE and ALE
+    single_loss_expectancy = asset_value * exposure_factor
+    annualized_loss_expectancy = annual_rate_of_occurrence * single_loss_expectancy
+
+    # Get beta distribution parameters
+    alpha, beta_param = get_beta_parameters_for_kurtosis(kurtosis)
+
+    # Monte Carlo simulation
+    simulated_EF = beta(a=alpha, b=beta_param).rvs(num_simulations)
+    simulated_ARO = poisson(mu=annual_rate_of_occurrence).rvs(num_simulations)
+
+    # Calculate losses
+    losses = asset_value * simulated_EF * simulated_ARO
+
+    return losses, simulated_EF, single_loss_expectancy, annualized_loss_expectancy
+
+
+def _calculate_statistics(losses: np.ndarray) -> dict:
+    """Calculate comprehensive statistics for loss distribution.
+
+    Args:
+        losses: Array of simulated losses
+
+    Returns:
+        dict: Statistics including mean, median, mode, std dev, and percentiles
+    """
+    stats_dict = {
+        "Mean": np.mean(losses),
+        "Median": np.median(losses),
+        "Mode": float(stats.mode(np.round(losses))[0]),
+        "Std Dev": np.std(losses),
+        "1st Percentile": np.percentile(losses, 1),
+        "2.5th Percentile": np.percentile(losses, 2.5),
+        "5th Percentile": np.percentile(losses, 5),
+        "10th Percentile": np.percentile(losses, 10),
+        "25th Percentile": np.percentile(losses, 25),
+        "75th Percentile": np.percentile(losses, 75),
+        "90th Percentile": np.percentile(losses, 90),
+        "95th Percentile": np.percentile(losses, 95),
+        "97.5th Percentile": np.percentile(losses, 97.5),
+        "99th Percentile": np.percentile(losses, 99),
+    }
+
+    # Add VaR values
+    var_values = calculate_var(losses, [0.9, 0.95, 0.99])
+    stats_dict.update(var_values)
+
+    return stats_dict
+
+
+def _plot_risk_distribution(
+    ax: plt.Axes,
+    losses: np.ndarray,
+    adjusted_losses: np.ndarray | None = None,
+    num_simulations: int = NUM_SIMULATIONS,
+    currency_symbol: str = CURRENCY_SYMBOL,
+) -> None:
+    """Plot risk distribution histogram with KDE curves.
+
+    Args:
+        ax: Matplotlib axes to plot on
+        losses: Array of losses before controls
+        adjusted_losses: Optional array of losses after controls
+        num_simulations: Number of simulations run
+        currency_symbol: Currency symbol for formatting
+    """
+    bins = np.linspace(
+        0,
+        (
+            losses.max()
+            if adjusted_losses is None
+            else max(losses.max(), adjusted_losses.max())
+        ),
+        50,
+    )
+
+    # Plot base case
+    ax.hist(
+        losses,
+        bins=bins,
+        alpha=0.5,
+        color="blue",
+        label="Base Case" if adjusted_losses is None else "Before Controls",
+    )
+    kde_losses = gaussian_kde(losses)
+    x_values = np.linspace(0, bins[-1], 1000)
+    ax.plot(
+        x_values,
+        kde_losses(x_values) * num_simulations * np.diff(bins)[0],
+        color="blue",
+    )
+
+    # Plot adjusted case if provided
+    if adjusted_losses is not None:
+        ax.hist(
+            adjusted_losses, bins=bins, alpha=0.5, color="green", label="After Controls"
+        )
+        kde_adjusted = gaussian_kde(adjusted_losses)
+        ax.plot(
+            x_values,
+            kde_adjusted(x_values) * num_simulations * np.diff(bins)[0],
+            color="green",
+        )
+
+    # Format axes
+    ax.xaxis.set_major_formatter(
+        plt.FuncFormatter(lambda x, p: f'{currency_symbol}{format(int(x), ",")}')
+    )
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: format(int(x), ",")))
+
+    ax.set_title("Risk Distribution")
+    ax.set_xlabel("Total Loss")
+    ax.set_ylabel("Frequency")
+    ax.legend()
+    ax.grid(True)
+
+
+def _calculate_exceedance_probabilities(losses: np.ndarray) -> np.ndarray:
+    """Calculate exceedance probabilities for a given array of losses.
+
+    Args:
+        losses: Array of losses
+
+    Returns:
+        np.ndarray: Exceedance probabilities
+    """
+    exceedance_prob = 100 * (1.0 - np.arange(1, len(losses) + 1) / len(losses))
+    return exceedance_prob
+
+
+def _plot_exceedance_curve(
+    ax: plt.Axes,
+    losses: np.ndarray,
+    adjusted_losses: np.ndarray | None = None,
+    currency_symbol: str = CURRENCY_SYMBOL,
+) -> None:
+    """Plot loss exceedance curve.
+
+    Args:
+        ax: Matplotlib axes to plot on
+        losses: Array of losses before controls
+        adjusted_losses: Optional array of losses after controls
+        currency_symbol: Currency symbol for formatting
+    """
+    # Calculate exceedance probabilities for base case
+    exceedance_prob = _calculate_exceedance_probabilities(losses)
+    ax.plot(
+        np.sort(losses),
+        exceedance_prob,
+        color="blue",
+        label="Base Case" if adjusted_losses is None else "Before Controls",
+    )
+
+    # Calculate exceedance probabilities for adjusted case if provided
+    if adjusted_losses is not None:
+        nonzero_adjusted = adjusted_losses[adjusted_losses > 0]
+        adjusted_prob = _calculate_exceedance_probabilities(nonzero_adjusted)
+        ax.plot(
+            np.sort(nonzero_adjusted),
+            adjusted_prob,
+            color="green",
+            label="After Controls",
+        )
+
+    # Format axes
+    ax.xaxis.set_major_formatter(
+        plt.FuncFormatter(lambda x, p: f'{currency_symbol}{format(int(x), ",")}')
+    )
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: "{:.0f}%".format(y)))
+
+    ax.set_title("Loss Exceedance Curve")
+    ax.set_xlabel("Total Loss")
+    ax.set_ylabel("Probability of Exceedance (%)")
+    ax.legend()
+    ax.grid(True)
+
+
 def plot_risk_calculation(
     asset_value: float,
     exposure_factor: float,
@@ -173,93 +373,35 @@ def plot_risk_calculation(
     # Set seed for reproducibility
     np.random.seed(monte_carlo_seed)
 
-    # Calculate SLE and ALE
-    single_loss_expectancy = asset_value * exposure_factor
-    annualized_loss_expectancy = annual_rate_of_occurrence * single_loss_expectancy
-
-    # Parameters for beta distribution
-    alpha, beta_param = get_beta_parameters_for_kurtosis(kurtosis)
-
-    # Monte Carlo simulation for EF with adjusted kurtosis
-    simulated_EF = beta(a=alpha, b=beta_param).rvs(num_simulations)
-    simulated_ARO = poisson(mu=annual_rate_of_occurrence).rvs(num_simulations)
-
-    # Calculate losses
-    losses = asset_value * simulated_EF * simulated_ARO
+    # Simulate losses
+    losses, _, single_loss_expectancy, annualized_loss_expectancy = _simulate_losses(
+        asset_value,
+        exposure_factor,
+        annual_rate_of_occurrence,
+        num_simulations,
+        kurtosis,
+    )
 
     # Calculate statistics
-    calc_stats = {
-        "Mean": np.mean(losses),
-        "Median": np.median(losses),
-        "Mode": float(stats.mode(np.round(losses))[0]),
-        "Std Dev": np.std(losses),
-        "1st Percentile": np.percentile(losses, 1),
-        "2.5th Percentile": np.percentile(losses, 2.5),
-        "5th Percentile": np.percentile(losses, 5),
-        "10th Percentile": np.percentile(losses, 10),
-        "25th Percentile": np.percentile(losses, 25),
-        "75th Percentile": np.percentile(losses, 75),
-        "90th Percentile": np.percentile(losses, 90),
-        "95th Percentile": np.percentile(losses, 95),
-        "97.5th Percentile": np.percentile(losses, 97.5),
-        "99th Percentile": np.percentile(losses, 99),
-    }
+    calc_stats = _calculate_statistics(losses)
 
     # Calculate exceedance probabilities
-    sorted_losses = np.sort(losses)
-    exceedance_prob = 100 * (1.0 - np.arange(1, num_simulations + 1) / num_simulations)
-
-    # Calculate Value at Risk (VaR) at different confidence levels
-    var_values = calculate_var(losses, [0.9, 0.95, 0.99])
-    calc_stats.update(var_values)
+    exceedance_prob = _calculate_exceedance_probabilities(losses)
 
     if plot:
         # Create figure with two subplots
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
 
         # Plot Risk Distribution
-        bins = np.linspace(0, losses.max(), 50)
-        ax1.hist(losses, bins=bins, alpha=0.5, color="blue", label="Base Case")
-
-        # Compute and plot KDE curve
-        kde_losses = gaussian_kde(losses)
-        x_values = np.linspace(0, bins[-1], 1000)
-        ax1.plot(
-            x_values,
-            kde_losses(x_values) * num_simulations * np.diff(bins)[0],
-            color="blue",
+        _plot_risk_distribution(
+            ax1,
+            losses,
+            num_simulations=num_simulations,
+            currency_symbol=currency_symbol,
         )
-
-        # Format axes
-        ax1.yaxis.set_major_formatter(
-            plt.FuncFormatter(lambda x, p: format(int(x), ","))
-        )
-        ax1.xaxis.set_major_formatter(
-            plt.FuncFormatter(lambda x, p: f'{currency_symbol}{format(int(x), ",")}')
-        )
-
-        ax1.set_title("Risk Distribution")
-        ax1.set_xlabel("Total Loss")
-        ax1.set_ylabel("Frequency")
-        ax1.legend()
-        ax1.grid(True)
 
         # Plot Loss Exceedance Curve
-        ax2.plot(sorted_losses, exceedance_prob, color="blue", label="Base Case")
-
-        # Format axes
-        ax2.xaxis.set_major_formatter(
-            plt.FuncFormatter(lambda x, p: f'{currency_symbol}{format(int(x), ",")}')
-        )
-        ax2.yaxis.set_major_formatter(
-            plt.FuncFormatter(lambda y, _: "{:.0f}%".format(y))
-        )
-
-        ax2.set_title("Loss Exceedance Curve")
-        ax2.set_xlabel("Total Loss")
-        ax2.set_ylabel("Probability of Exceedance (%)")
-        ax2.legend()
-        ax2.grid(True)
+        _plot_exceedance_curve(ax2, losses, currency_symbol=currency_symbol)
 
         # Add statistics table
         statistics_text = "\n".join(
@@ -410,62 +552,30 @@ def plot_risk_calculation_with_controls(
     # Set seed for reproducibility
     np.random.seed(monte_carlo_seed)
 
-    # Calculate SLE and ALE
-    single_loss_expectancy = asset_value * exposure_factor
-    annualized_loss_expectancy = annual_rate_of_occurrence * single_loss_expectancy
+    # Simulate losses before controls
+    losses, _, single_loss_expectancy, annualized_loss_expectancy = _simulate_losses(
+        asset_value,
+        exposure_factor,
+        annual_rate_of_occurrence,
+        num_simulations,
+        kurtosis,
+    )
 
     # Adjusted ARO after controls
     adjusted_ARO = annual_rate_of_occurrence * (1 - reduction_percentage / 100)
 
-    # Parameters for beta distribution to adjust kurtosis
-    alpha, beta_param = get_beta_parameters_for_kurtosis(kurtosis)
+    # Simulate losses after controls
+    adjusted_losses, _, _, _ = _simulate_losses(
+        asset_value, exposure_factor, adjusted_ARO, num_simulations, kurtosis
+    )
 
-    # Monte Carlo simulation for EF with adjusted kurtosis
-    simulated_EF = beta(a=alpha, b=beta_param).rvs(num_simulations)
+    # Calculate statistics before and after controls
+    calc_stats = _calculate_statistics(losses)
+    calc_adjusted_stats = _calculate_statistics(adjusted_losses)
 
-    # Simulate ARO distributions
-    simulated_ARO = poisson(mu=annual_rate_of_occurrence).rvs(num_simulations)
-    simulated_adjusted_ARO = poisson(mu=adjusted_ARO).rvs(num_simulations)
-
-    # Calculate losses
-    losses = asset_value * simulated_EF * simulated_ARO
-    adjusted_losses = asset_value * simulated_EF * simulated_adjusted_ARO
-
-    # Calculate statistics before controls
-    calc_stats = {
-        "Mean": np.mean(losses),
-        "Median": np.median(losses),  # Also 50th percentile
-        "Mode": float(stats.mode(np.round(losses))[0]),
-        "Std Dev": np.std(losses),
-        "1st Percentile": np.percentile(losses, 1),
-        "2.5th Percentile": np.percentile(losses, 2.5),
-        "5th Percentile": np.percentile(losses, 5),
-        "10th Percentile": np.percentile(losses, 10),
-        "25th Percentile": np.percentile(losses, 25),
-        "75th Percentile": np.percentile(losses, 75),
-        "90th Percentile": np.percentile(losses, 90),
-        "95th Percentile": np.percentile(losses, 95),
-        "97.5th Percentile": np.percentile(losses, 97.5),
-        "99th Percentile": np.percentile(losses, 99),
-    }
-
-    # Calculate statistics after controls
-    calc_adjusted_stats = {
-        "Mean": np.mean(adjusted_losses),
-        "Median": np.median(adjusted_losses),
-        "Mode": float(stats.mode(np.round(adjusted_losses))[0]),
-        "Std Dev": np.std(adjusted_losses),
-        "1st Percentile": np.percentile(adjusted_losses, 1),
-        "2.5th Percentile": np.percentile(adjusted_losses, 2.5),
-        "5th Percentile": np.percentile(adjusted_losses, 5),
-        "10th Percentile": np.percentile(adjusted_losses, 10),
-        "25th Percentile": np.percentile(adjusted_losses, 25),
-        "75th Percentile": np.percentile(adjusted_losses, 75),
-        "90th Percentile": np.percentile(adjusted_losses, 90),
-        "95th Percentile": np.percentile(adjusted_losses, 95),
-        "97.5th Percentile": np.percentile(adjusted_losses, 97.5),
-        "99th Percentile": np.percentile(adjusted_losses, 99),
-    }
+    # Calculate exceedance probabilities
+    exceedance_prob = _calculate_exceedance_probabilities(losses)
+    adjusted_exceedance_prob = _calculate_exceedance_probabilities(adjusted_losses)
 
     # Calculate expected reduction in loss
     expected_loss_before = np.mean(losses)
@@ -486,97 +596,25 @@ def plot_risk_calculation_with_controls(
     )
     calc_adjusted_stats["First Non-Zero Percentile"] = first_nonzero_pct
     calc_adjusted_stats["First Non-Zero Value"] = first_nonzero_val
-
-    # Calculate loss exceedance probabilities values
-    sorted_losses = np.sort(losses)
-    exceedance_prob = 100 * (1.0 - np.arange(1, num_simulations + 1) / num_simulations)
-
-    # Filter out zeros for adjusted losses
+    
     nonzero_adjusted_losses = adjusted_losses[adjusted_losses > 0]
-    sorted_adjusted_losses = np.sort(nonzero_adjusted_losses)
-    adjusted_exceedance_prob = 100 * (
-        1.0
-        - np.arange(1, len(nonzero_adjusted_losses) + 1) / len(nonzero_adjusted_losses)
-    )
 
-    # Calculate Value at Risk (VaR) at different confidence levels for both cases
-    var_values = calculate_var(losses, [0.9, 0.95, 0.99])
-    calc_stats.update(var_values)
-
-    adjusted_var_values = calculate_var(nonzero_adjusted_losses, [0.9, 0.95, 0.99])
-    calc_adjusted_stats.update(adjusted_var_values)
-
-    # If plot is True, plot the risk distribution and loss exceedance curve
     if plot:
         # Create a figure with two subplots
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
 
         # Plot Risk Distribution
-        bins = np.linspace(0, max(losses.max(), adjusted_losses.max()), 50)
-        ax1.hist(losses, bins=bins, alpha=0.5, color="blue", label="Before Controls")
-        ax1.hist(
+        _plot_risk_distribution(
+            ax1,
+            losses,
             adjusted_losses,
-            bins=bins,
-            alpha=0.5,
-            color="green",
-            label="After Controls",
+            num_simulations=num_simulations,
+            currency_symbol=currency_symbol,
         )
-
-        # Compute and plot KDE curves
-        kde_losses = gaussian_kde(losses)
-        kde_adjusted_losses = gaussian_kde(adjusted_losses)
-        x_values = np.linspace(0, bins[-1], 1000)
-        ax1.plot(
-            x_values,
-            kde_losses(x_values) * num_simulations * np.diff(bins)[0],
-            color="blue",
-        )
-        ax1.plot(
-            x_values,
-            kde_adjusted_losses(x_values) * num_simulations * np.diff(bins)[0],
-            color="green",
-        )
-
-        # Disable scientific notation for Risk Distribution
-        ax1.xaxis.set_major_formatter(
-            plt.FuncFormatter(lambda x, p: f'{currency_symbol}{format(int(x), ",")}')
-        )
-        ax1.yaxis.set_major_formatter(
-            plt.FuncFormatter(lambda x, p: format(int(x), ","))
-        )
-
-        ax1.set_title(f"Risk Distribution over {num_simulations} Simulations")
-        ax1.set_xlabel("Total Loss")
-        ax1.set_ylabel("Frequency")
-        ax1.legend()
-        ax1.grid(True)
 
         # Plot Loss Exceedance Curves
-        ax2.plot(sorted_losses, exceedance_prob, color="blue", label="Before Controls")
-        ax2.plot(
-            sorted_adjusted_losses,
-            adjusted_exceedance_prob,
-            color="green",
-            label="After Controls",
-        )
-
-        # Format Loss Exceedance Curve axes as non-scientific notation
-        ax2.xaxis.set_major_formatter(
-            plt.FuncFormatter(lambda x, p: f'{currency_symbol}{format(int(x), ",")}')
-        )
-        ax2.yaxis.set_major_formatter(
-            plt.FuncFormatter(lambda y, _: "{:.0f}%".format(y))
-        )
-
-        ax2.set_title("Loss Exceedance Curve")
-        ax2.set_xlabel("Total Loss")
-        ax2.set_ylabel("Probability of Exceedance (%)")
-        ax2.legend()
-        ax2.grid(True)
-
-        # Format y-axis ticks as percentages
-        ax2.yaxis.set_major_formatter(
-            plt.FuncFormatter(lambda y, _: "{:.0f}%".format(y))
+        _plot_exceedance_curve(
+            ax2, losses, adjusted_losses, currency_symbol=currency_symbol
         )
 
         # Add statistics tables
