@@ -5,7 +5,7 @@ from scipy.stats import beta, poisson, gaussian_kde
 import json
 
 MONTE_CARLO_SEED = 42
-NUM_SIMULATIONS = 10000
+NUM_SIMULATIONS = 100000
 KURTOSIS = 1.7  # Default value is 3
 CURRENCY_SYMBOL = "\\$"
 
@@ -34,11 +34,15 @@ def get_beta_parameters_for_kurtosis(kurtosis: int) -> tuple[float, float]:
     return a, b
 
 
-def find_first_non_zero_percentile(data: np.ndarray) -> tuple[float, float]:
-    """Helper function to find the first non-zero value and its percentile in a data array. The data does not need to be sorted as the function will do it for you.
+def find_first_non_zero_percentile(
+    data: np.ndarray, decimal_places: int = 2
+) -> tuple[float, float]:
+    """Helper function to find the first non-zero value and its percentile in a data array.
+    Considers a value non-zero if it rounds to non-zero at specified decimal places.
 
     Args:
         data: numpy array of numeric values to analyze
+        decimal_places: number of decimal places to consider for zero comparison (default: 2)
 
     Returns:
         tuple[float, float]: A tuple containing:
@@ -47,17 +51,25 @@ def find_first_non_zero_percentile(data: np.ndarray) -> tuple[float, float]:
 
     Raises:
         TypeError: If input is not a numpy array
-        ValueError: If array is empty
+        ValueError: If array is empty or decimal_places is negative
     """
     if not isinstance(data, np.ndarray):
         raise TypeError("Input must be a numpy array")
     if len(data) == 0:
         raise ValueError("Input array cannot be empty")
+    if decimal_places < 0:
+        raise ValueError("Decimal places must be non-negative")
 
-    sorted_data = np.sort(data)
-    non_zero_idx = np.argmax(sorted_data > 0)
-    if non_zero_idx == 0 and sorted_data[0] == 0:
+    # Round data to specified decimal places
+    rounded_data = np.round(data, decimals=decimal_places)
+    sorted_data = np.sort(data)  # Original values for return
+    sorted_rounded = np.sort(rounded_data)  # Rounded for comparison
+
+    # Find first non-zero in rounded data
+    non_zero_idx = np.argmax(sorted_rounded > 0)
+    if non_zero_idx == 0 and sorted_rounded[0] == 0:
         return 0.0, 0.0
+
     percentile = (non_zero_idx / len(data)) * 100
     return float(percentile), float(sorted_data[non_zero_idx])
 
@@ -100,6 +112,24 @@ def _validate_simulation_params(**kwargs) -> None:
     for param, (rule, message) in param_rules.items():
         if param in kwargs and not rule(kwargs[param]):
             raise ValueError(f"{param} {message}")
+
+
+def calculate_var(
+    losses: np.ndarray, confidence_levels: list[float]
+) -> dict[str, float]:
+    """Calculate Value at Risk at different confidence levels.
+
+    Args:
+        losses: Array of simulated losses
+        confidence_levels: List of confidence levels (e.g. [0.9, 0.95, 0.99])
+
+    Returns:
+        dict: VaR values at specified confidence levels
+    """
+    var_values = {}
+    for conf in confidence_levels:
+        var_values[f"VaR_{int(conf*100)}"] = float(np.percentile(losses, conf * 100))
+    return var_values
 
 
 def plot_risk_calculation(
@@ -179,6 +209,10 @@ def plot_risk_calculation(
     sorted_losses = np.sort(losses)
     exceedance_prob = 100 * (1.0 - np.arange(1, num_simulations + 1) / num_simulations)
 
+    # Calculate Value at Risk (VaR) at different confidence levels
+    var_values = calculate_var(losses, [0.9, 0.95, 0.99])
+    calc_stats.update(var_values)
+
     if plot:
         # Create figure with two subplots
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
@@ -236,6 +270,9 @@ def plot_risk_calculation(
                 f'Median: {currency_symbol}{calc_stats["Median"]:,.2f}',
                 f'Mode: {currency_symbol}{calc_stats["Mode"]:,.2f}',
                 f'Std Dev: {currency_symbol}{calc_stats["Std Dev"]:,.2f}',
+                f'VaR (90%): {currency_symbol}{calc_stats["VaR_90"]:,.2f}',
+                f'VaR (95%): {currency_symbol}{calc_stats["VaR_95"]:,.2f}',
+                f'VaR (99%): {currency_symbol}{calc_stats["VaR_99"]:,.2f}',
                 f'1st Percentile: {currency_symbol}{calc_stats["1st Percentile"]:,.2f}',
                 f'95% CI: {currency_symbol}{calc_stats["2.5th Percentile"]:,.2f} - {currency_symbol}{calc_stats["97.5th Percentile"]:,.2f}',
                 f'99th Percentile: {currency_symbol}{calc_stats["99th Percentile"]:,.2f}',
@@ -282,6 +319,9 @@ def plot_risk_calculation(
                 "median": float(calc_stats["Median"]),
                 "mode": float(calc_stats["Mode"]),
                 "std_dev": float(calc_stats["Std Dev"]),
+                "var_90": float(calc_stats["VaR_90"]),
+                "var_95": float(calc_stats["VaR_95"]),
+                "var_99": float(calc_stats["VaR_99"]),
                 "percentile_1": float(calc_stats["1st Percentile"]),
                 "percentile_2.5": float(calc_stats["2.5th Percentile"]),
                 "percentile_5": float(calc_stats["5th Percentile"]),
@@ -437,7 +477,7 @@ def plot_risk_calculation_with_controls(
     if cost_of_controls > 0:
         rosi_percentage = (benefit - cost_of_controls) / cost_of_controls * 100
     else:
-        rosi_percentage = float('inf')
+        rosi_percentage = float("inf")
 
     # For after controls, 2.5% percentile is likely to be zero due to the reduction
     # Calculate the first non-zero percentile and value to show in the table instead
@@ -458,6 +498,13 @@ def plot_risk_calculation_with_controls(
         1.0
         - np.arange(1, len(nonzero_adjusted_losses) + 1) / len(nonzero_adjusted_losses)
     )
+
+    # Calculate Value at Risk (VaR) at different confidence levels for both cases
+    var_values = calculate_var(losses, [0.9, 0.95, 0.99])
+    calc_stats.update(var_values)
+
+    adjusted_var_values = calculate_var(nonzero_adjusted_losses, [0.9, 0.95, 0.99])
+    calc_adjusted_stats.update(adjusted_var_values)
 
     # If plot is True, plot the risk distribution and loss exceedance curve
     if plot:
@@ -541,6 +588,9 @@ def plot_risk_calculation_with_controls(
                 f'Median: {currency_symbol}{calc_stats["Median"]:,.2f}',
                 f'Mode: {currency_symbol}{calc_stats["Mode"]:,.2f}',
                 f'Std Dev: {currency_symbol}{calc_stats["Std Dev"]:,.2f}',
+                f'VaR (90%): {currency_symbol}{calc_stats["VaR_90"]:,.2f}',
+                f'VaR (95%): {currency_symbol}{calc_stats["VaR_95"]:,.2f}',
+                f'VaR (99%): {currency_symbol}{calc_stats["VaR_99"]:,.2f}',
                 f'1st Percentile: {currency_symbol}{calc_stats["1st Percentile"]:,.2f}',
                 f'95% CI: {currency_symbol}{calc_stats["2.5th Percentile"]:,.2f} - {currency_symbol}{calc_stats["97.5th Percentile"]:,.2f}',
                 f'99th Percentile: {currency_symbol}{calc_stats["99th Percentile"]:,.2f}',
@@ -554,6 +604,9 @@ def plot_risk_calculation_with_controls(
             f'Median: {currency_symbol}{calc_adjusted_stats["Median"]:,.2f}',
             f'Mode: {currency_symbol}{calc_adjusted_stats["Mode"]:,.2f}',
             f'Std Dev: {currency_symbol}{calc_adjusted_stats["Std Dev"]:,.2f}',
+            f'VaR (90%): {currency_symbol}{calc_adjusted_stats["VaR_90"]:,.2f}',
+            f'VaR (95%): {currency_symbol}{calc_adjusted_stats["VaR_95"]:,.2f}',
+            f'VaR (99%): {currency_symbol}{calc_adjusted_stats["VaR_99"]:,.2f}',
         ]
 
         # Conditionally add the 1st percentile if it is non-zero (otherwise use the first non-zero value)
@@ -652,6 +705,9 @@ def plot_risk_calculation_with_controls(
                 "median": float(calc_stats["Median"]),
                 "mode": float(calc_stats["Mode"]),
                 "std_dev": float(calc_stats["Std Dev"]),
+                "var_90": float(calc_stats["VaR_90"]),
+                "var_95": float(calc_stats["VaR_95"]),
+                "var_99": float(calc_stats["VaR_99"]),
                 "percentile_1": float(calc_stats["1st Percentile"]),
                 "percentile_2.5": float(calc_stats["2.5th Percentile"]),
                 "percentile_5": float(calc_stats["5th Percentile"]),
@@ -667,6 +723,9 @@ def plot_risk_calculation_with_controls(
                 "median": float(calc_adjusted_stats["Median"]),
                 "mode": float(calc_adjusted_stats["Mode"]),
                 "std_dev": float(calc_adjusted_stats["Std Dev"]),
+                "var_90": float(calc_adjusted_stats["VaR_90"]),
+                "var_95": float(calc_adjusted_stats["VaR_95"]),
+                "var_99": float(calc_adjusted_stats["VaR_99"]),
                 "percentile_1": float(calc_adjusted_stats["1st Percentile"]),
                 "percentile_2.5": float(calc_adjusted_stats["2.5th Percentile"]),
                 "percentile_5": float(calc_adjusted_stats["5th Percentile"]),
@@ -724,7 +783,7 @@ def main():
 
     # Plot the risk calculation with controls
     test = plot_risk_calculation_with_controls(
-        AV, EF, ARO, reduction_percentage, control_cost, plot=True
+        AV, EF, ARO, reduction_percentage, control_cost, plot=False
     )
     with open("risk_simulation_results.json", "w") as f:
         json.dump(test, f, indent=4)
