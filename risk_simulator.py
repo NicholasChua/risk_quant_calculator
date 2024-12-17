@@ -243,8 +243,8 @@ def _plot_risk_distribution(
     )
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: format(int(x), ",")))
 
-    ax.set_title("Risk Distribution")
-    ax.set_xlabel("Total Loss")
+    ax.set_title(f"Risk Distribution over {num_simulations} Simulations")
+    ax.set_xlabel("Total Expected Loss")
     ax.set_ylabel("Frequency")
     ax.legend()
     ax.grid(True)
