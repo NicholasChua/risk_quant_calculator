@@ -35,8 +35,11 @@ def yearly_loss(control_effectiveness):
 
 
 def plot_risk_reduction(years, losses):
+    # Add year 0
+    years = [0] + years
     initial_loss = AV * EF * ARO
-    risk_remaining = [loss / initial_loss * 100 for loss in losses]
+    losses = [initial_loss] + losses
+    risk_remaining = [100.0] + [loss / initial_loss * 100 for loss in losses[1:]]
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12))
 
@@ -46,15 +49,18 @@ def plot_risk_reduction(years, losses):
     ax1.set_xlabel("Year")
     ax1.set_ylabel("Loss ($)")
     ax1.grid(True)
-    ax1.set_xticks(years)  # Set integer ticks
+    ax1.set_xticks(years)
 
     # Risk reduction plot
     ax2.plot(years, risk_remaining, marker="o", color="red")
     ax2.set_title("Remaining Risk Percentage")
     ax2.set_xlabel("Year")
     ax2.set_ylabel("Risk Remaining (%)")
+    ax2.set_ylim(0, 100)
+    ax2.set_yticks(range(0, 101, 10))
+    ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{int(y)}%'))
     ax2.grid(True)
-    ax2.set_xticks(years)  # Set integer ticks
+    ax2.set_xticks(years)
 
     plt.tight_layout()
     return fig
