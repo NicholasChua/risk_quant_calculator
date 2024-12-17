@@ -114,24 +114,6 @@ def _validate_simulation_params(**kwargs) -> None:
             raise ValueError(f"{param} {message}")
 
 
-def calculate_var(
-    losses: np.ndarray, confidence_levels: list[float]
-) -> dict[str, float]:
-    """Calculate Value at Risk at different confidence levels.
-
-    Args:
-        losses: Array of simulated losses
-        confidence_levels: List of confidence levels (e.g. [0.9, 0.95, 0.99])
-
-    Returns:
-        dict: VaR values at specified confidence levels
-    """
-    var_values = {}
-    for conf in confidence_levels:
-        var_values[f"VaR_{int(conf*100)}"] = float(np.percentile(losses, conf * 100))
-    return var_values
-
-
 def _simulate_losses(
     asset_value: float,
     exposure_factor: float,
@@ -197,10 +179,6 @@ def _calculate_statistics(losses: np.ndarray) -> dict:
         "97.5th Percentile": np.percentile(losses, 97.5),
         "99th Percentile": np.percentile(losses, 99),
     }
-
-    # Add VaR values
-    var_values = calculate_var(losses, [0.9, 0.95, 0.99])
-    stats_dict.update(var_values)
 
     return stats_dict
 
@@ -390,7 +368,7 @@ def plot_risk_calculation(
 
     if plot:
         # Create figure with two subplots
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+        _, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
 
         # Plot Risk Distribution
         _plot_risk_distribution(
@@ -412,9 +390,6 @@ def plot_risk_calculation(
                 f'Median: {currency_symbol}{calc_stats["Median"]:,.2f}',
                 f'Mode: {currency_symbol}{calc_stats["Mode"]:,.2f}',
                 f'Std Dev: {currency_symbol}{calc_stats["Std Dev"]:,.2f}',
-                f'VaR (90%): {currency_symbol}{calc_stats["VaR_90"]:,.2f}',
-                f'VaR (95%): {currency_symbol}{calc_stats["VaR_95"]:,.2f}',
-                f'VaR (99%): {currency_symbol}{calc_stats["VaR_99"]:,.2f}',
                 f'1st Percentile: {currency_symbol}{calc_stats["1st Percentile"]:,.2f}',
                 f'95% CI: {currency_symbol}{calc_stats["2.5th Percentile"]:,.2f} - {currency_symbol}{calc_stats["97.5th Percentile"]:,.2f}',
                 f'99th Percentile: {currency_symbol}{calc_stats["99th Percentile"]:,.2f}',
@@ -461,9 +436,6 @@ def plot_risk_calculation(
                 "median": float(calc_stats["Median"]),
                 "mode": float(calc_stats["Mode"]),
                 "std_dev": float(calc_stats["Std Dev"]),
-                "var_90": float(calc_stats["VaR_90"]),
-                "var_95": float(calc_stats["VaR_95"]),
-                "var_99": float(calc_stats["VaR_99"]),
                 "percentile_1": float(calc_stats["1st Percentile"]),
                 "percentile_2.5": float(calc_stats["2.5th Percentile"]),
                 "percentile_5": float(calc_stats["5th Percentile"]),
@@ -596,12 +568,12 @@ def plot_risk_calculation_with_controls(
     )
     calc_adjusted_stats["First Non-Zero Percentile"] = first_nonzero_pct
     calc_adjusted_stats["First Non-Zero Value"] = first_nonzero_val
-    
+
     nonzero_adjusted_losses = adjusted_losses[adjusted_losses > 0]
 
     if plot:
         # Create a figure with two subplots
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+        _, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
 
         # Plot Risk Distribution
         _plot_risk_distribution(
@@ -626,9 +598,6 @@ def plot_risk_calculation_with_controls(
                 f'Median: {currency_symbol}{calc_stats["Median"]:,.2f}',
                 f'Mode: {currency_symbol}{calc_stats["Mode"]:,.2f}',
                 f'Std Dev: {currency_symbol}{calc_stats["Std Dev"]:,.2f}',
-                f'VaR (90%): {currency_symbol}{calc_stats["VaR_90"]:,.2f}',
-                f'VaR (95%): {currency_symbol}{calc_stats["VaR_95"]:,.2f}',
-                f'VaR (99%): {currency_symbol}{calc_stats["VaR_99"]:,.2f}',
                 f'1st Percentile: {currency_symbol}{calc_stats["1st Percentile"]:,.2f}',
                 f'95% CI: {currency_symbol}{calc_stats["2.5th Percentile"]:,.2f} - {currency_symbol}{calc_stats["97.5th Percentile"]:,.2f}',
                 f'99th Percentile: {currency_symbol}{calc_stats["99th Percentile"]:,.2f}',
@@ -642,9 +611,6 @@ def plot_risk_calculation_with_controls(
             f'Median: {currency_symbol}{calc_adjusted_stats["Median"]:,.2f}',
             f'Mode: {currency_symbol}{calc_adjusted_stats["Mode"]:,.2f}',
             f'Std Dev: {currency_symbol}{calc_adjusted_stats["Std Dev"]:,.2f}',
-            f'VaR (90%): {currency_symbol}{calc_adjusted_stats["VaR_90"]:,.2f}',
-            f'VaR (95%): {currency_symbol}{calc_adjusted_stats["VaR_95"]:,.2f}',
-            f'VaR (99%): {currency_symbol}{calc_adjusted_stats["VaR_99"]:,.2f}',
         ]
 
         # Conditionally add the 1st percentile if it is non-zero (otherwise use the first non-zero value)
@@ -743,9 +709,6 @@ def plot_risk_calculation_with_controls(
                 "median": float(calc_stats["Median"]),
                 "mode": float(calc_stats["Mode"]),
                 "std_dev": float(calc_stats["Std Dev"]),
-                "var_90": float(calc_stats["VaR_90"]),
-                "var_95": float(calc_stats["VaR_95"]),
-                "var_99": float(calc_stats["VaR_99"]),
                 "percentile_1": float(calc_stats["1st Percentile"]),
                 "percentile_2.5": float(calc_stats["2.5th Percentile"]),
                 "percentile_5": float(calc_stats["5th Percentile"]),
@@ -761,9 +724,6 @@ def plot_risk_calculation_with_controls(
                 "median": float(calc_adjusted_stats["Median"]),
                 "mode": float(calc_adjusted_stats["Mode"]),
                 "std_dev": float(calc_adjusted_stats["Std Dev"]),
-                "var_90": float(calc_adjusted_stats["VaR_90"]),
-                "var_95": float(calc_adjusted_stats["VaR_95"]),
-                "var_99": float(calc_adjusted_stats["VaR_99"]),
                 "percentile_1": float(calc_adjusted_stats["1st Percentile"]),
                 "percentile_2.5": float(calc_adjusted_stats["2.5th Percentile"]),
                 "percentile_5": float(calc_adjusted_stats["5th Percentile"]),
@@ -808,16 +768,16 @@ def plot_risk_calculation_with_controls(
 
 def main():
     # Get user inputs
-    AV = float(input("Enter the Asset Value (AV): "))
-    EF = float(input("Enter the Exposure Factor (EF) between 0 and 1: "))
-    ARO = float(input("Enter the Annual Rate of Occurrence (ARO): "))
-    reduction_percentage = float(
-        input("Enter the Percentage reduction after controls (%): ")
-    )
-    control_cost = float(input("Enter the cost of implementing controls: "))
+    # AV = float(input("Enter the Asset Value (AV): "))
+    # EF = float(input("Enter the Exposure Factor (EF) between 0 and 1: "))
+    # ARO = float(input("Enter the Annual Rate of Occurrence (ARO): "))
+    # reduction_percentage = float(
+    #     input("Enter the Percentage reduction after controls (%): ")
+    # )
+    # control_cost = float(input("Enter the cost of implementing controls: "))
 
     # Hardcoded inputs for testing
-    # AV, EF, ARO, reduction_percentage, control_cost = 100000, 0.5, 5, 80, 10000
+    AV, EF, ARO, reduction_percentage, control_cost = 100000, 0.5, 5, 80, 10000
 
     # Plot the risk calculation with controls
     test = plot_risk_calculation_with_controls(
