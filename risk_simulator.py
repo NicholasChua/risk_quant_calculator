@@ -97,9 +97,9 @@ def _validate_simulation_params(**kwargs) -> None:
     param_rules = {
         "exposure_factor": (lambda x: 0 <= x <= 1, "must be between 0 and 1"),
         "reduction_percentage": (
-            lambda x: 0 < x < 100,
-            "must be between 0 and 100 (exclusive)",
-        ),
+            lambda x: x <= 99,
+            "must be 99 or less",
+        ), # Allow negative values to model increase in risk, disallow 100 as it is risk avoidance and not risk reduction
         "annual_rate_of_occurrence": (lambda x: x >= 0, "must be a positive value"),
         "asset_value": (lambda x: x >= 0, "must be a positive value"),
         "kurtosis": (lambda x: x >= 0, "must be a positive value"),
@@ -310,163 +310,13 @@ def _plot_exceedance_curve(
     ax.grid(True)
 
 
-def plot_risk_calculation(
-    asset_value: float,
-    exposure_factor: float,
-    annual_rate_of_occurrence: float,
-    plot=True,
-    monte_carlo_seed: int = MONTE_CARLO_SEED,
-    num_simulations: int = NUM_SIMULATIONS,
-    kurtosis: int = KURTOSIS,
-    currency_symbol: str = CURRENCY_SYMBOL,
-) -> None | dict:
-    """Estimate the mean loss and the effectiveness of risk controls using Monte Carlo simulations for one scenario. This function simulates the potential losses to an asset based on a given exposure factor (EF) and annual rate of occurrence (ARO) for a specific asset value (AV). It provides a risk distribution and a loss exceedance curve. The statistics and simulation results are either plotted or returned as a dictionary.
-
-    This function is similar to plot_risk_calculation_with_controls() but only simulates one scenario where either no controls are applied or controls are applied but the scenario before application is not considered.
-
-    Args:
-        asset_value: The value of the asset at risk, expressed in monetary units.
-        exposure_factor: The percentage of the asset value that is at risk during a risk event, expressed as a decimal.
-        annual_rate_of_occurrence: The frequency of the risk event over a year, expressed as a decimal.
-        plot: A boolean indicating whether to plot the results (default is True).
-        monte_carlo_seed: The seed for the Monte Carlo simulation to ensure reproducibility (default is constant MONTE_CARLO_SEED).
-        num_simulations: The number of simulations to run for the Monte Carlo analysis (default is constant NUM_SIMULATIONS).
-        kurtosis: The kurtosis value to adjust the shape of the beta distribution for the EF (default is constant KURTOSIS).
-        currency_symbol: The currency symbol to use in the plot displays. (default is constant CURRENCY_SYMBOL).
-
-    Returns:
-        dict | None: A dictionary containing the statistics, input parameters, and simulation results if plot is False. If plot is True, the function displays the visualizations and tables without returning a dictionary.
-    """
-    # Input validation
-    _validate_simulation_params(
-        exposure_factor=exposure_factor,
-        annual_rate_of_occurrence=annual_rate_of_occurrence,
-        asset_value=asset_value,
-        kurtosis=kurtosis,
-        num_simulations=num_simulations,
-        monte_carlo_seed=monte_carlo_seed,
-        plot=plot,
-    )
-
-    # Set seed for reproducibility
-    np.random.seed(monte_carlo_seed)
-
-    # Simulate losses
-    losses, _, single_loss_expectancy, annualized_loss_expectancy = _simulate_losses(
-        asset_value,
-        exposure_factor,
-        annual_rate_of_occurrence,
-        num_simulations,
-        kurtosis,
-    )
-
-    # Calculate statistics
-    calc_stats = _calculate_statistics(losses)
-
-    # Calculate exceedance probabilities
-    exceedance_prob = _calculate_exceedance_probabilities(losses)
-
-    if plot:
-        # Create figure with two subplots
-        _, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
-
-        # Plot Risk Distribution
-        _plot_risk_distribution(
-            ax1,
-            losses,
-            num_simulations=num_simulations,
-            currency_symbol=currency_symbol,
-        )
-
-        # Plot Loss Exceedance Curve
-        _plot_exceedance_curve(ax2, losses, currency_symbol=currency_symbol)
-
-        # Add statistics table
-        statistics_text = "\n".join(
-            [
-                "Statistical Summary",
-                "-------------------",
-                f'Mean: {currency_symbol}{calc_stats["Mean"]:,.2f}',
-                f'Median: {currency_symbol}{calc_stats["Median"]:,.2f}',
-                f'Mode: {currency_symbol}{calc_stats["Mode"]:,.2f}',
-                f'Std Dev: {currency_symbol}{calc_stats["Std Dev"]:,.2f}',
-                f'1st Percentile: {currency_symbol}{calc_stats["1st Percentile"]:,.2f}',
-                f'95% CI: {currency_symbol}{calc_stats["2.5th Percentile"]:,.2f} - {currency_symbol}{calc_stats["97.5th Percentile"]:,.2f}',
-                f'99th Percentile: {currency_symbol}{calc_stats["99th Percentile"]:,.2f}',
-            ]
-        )
-
-        # Add input parameters table
-        parameters_text = "\n".join(
-            [
-                "Input Parameters",
-                "----------------",
-                f"Asset Value (AV): {currency_symbol}{asset_value:,.2f}",
-                f"Exposure Factor (EF): {exposure_factor:.2%}",
-                f"Annualized Rate of Occurrence (ARO): {annual_rate_of_occurrence:.2f}",
-                f"Single Loss Expectancy (SLE): {currency_symbol}{single_loss_expectancy:,.2f}",
-                f"Annualized Loss Expectancy (ALE): {currency_symbol}{annualized_loss_expectancy:,.2f}",
-            ]
-        )
-
-        # Position text boxes
-        plt.figtext(
-            0.15,
-            0.02,
-            statistics_text,
-            fontsize=10,
-            bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray"),
-        )
-        plt.figtext(
-            0.65,
-            0.02,
-            parameters_text,
-            fontsize=10,
-            bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray"),
-        )
-
-        plt.tight_layout()
-        plt.subplots_adjust(bottom=0.25, hspace=0.25)
-        plt.show()
-
-    else:
-        return {
-            "statistics": {
-                "mean": float(calc_stats["Mean"]),
-                "median": float(calc_stats["Median"]),
-                "mode": float(calc_stats["Mode"]),
-                "std_dev": float(calc_stats["Std Dev"]),
-                "percentile_1": float(calc_stats["1st Percentile"]),
-                "percentile_2.5": float(calc_stats["2.5th Percentile"]),
-                "percentile_5": float(calc_stats["5th Percentile"]),
-                "percentile_10": float(calc_stats["10th Percentile"]),
-                "percentile_25": float(calc_stats["25th Percentile"]),
-                "percentile_75": float(calc_stats["75th Percentile"]),
-                "percentile_90": float(calc_stats["90th Percentile"]),
-                "percentile_97.5": float(calc_stats["97.5th Percentile"]),
-                "percentile_99": float(calc_stats["99th Percentile"]),
-            },
-            "input_parameters": {
-                "asset_value": float(asset_value),
-                "exposure_factor": float(exposure_factor),
-                "annual_rate_of_occurrence": float(annual_rate_of_occurrence),
-                "single_loss_expectancy": float(single_loss_expectancy),
-                "annualized_loss_expectancy": float(annualized_loss_expectancy),
-            },
-            "simulation_results": {
-                "losses": losses.tolist(),
-                "exceedance_probabilities": exceedance_prob.tolist(),
-            },
-        }
-
-
 def plot_risk_calculation_with_controls(
     asset_value: float,
     exposure_factor: float,
     annual_rate_of_occurrence: float,
     reduction_percentage: float,
     cost_of_controls: float,
-    plot=True,
+    plot: bool = True,
     monte_carlo_seed: int = MONTE_CARLO_SEED,
     num_simulations: int = NUM_SIMULATIONS,
     kurtosis: int = KURTOSIS,
@@ -619,7 +469,7 @@ def plot_risk_calculation_with_controls(
                 f'1st Percentile: {currency_symbol}{calc_adjusted_stats["1st Percentile"]:,.2f}'
             )
             after_controls_lines.append(
-                f'CI 95%: {currency_symbol}{calc_adjusted_stats["2.5th Percentile"]:,.2f} - {currency_symbol}{calc_adjusted_stats["97.5th Percentile"]:,.2f}'
+                f'95% CI: {currency_symbol}{calc_adjusted_stats["2.5th Percentile"]:,.2f} - {currency_symbol}{calc_adjusted_stats["97.5th Percentile"]:,.2f}'
             )
         else:
             after_controls_lines.append(
@@ -768,23 +618,23 @@ def plot_risk_calculation_with_controls(
 
 def main():
     # Get user inputs
-    # AV = float(input("Enter the Asset Value (AV): "))
-    # EF = float(input("Enter the Exposure Factor (EF) between 0 and 1: "))
-    # ARO = float(input("Enter the Annual Rate of Occurrence (ARO): "))
-    # reduction_percentage = float(
-    #     input("Enter the Percentage reduction after controls (%): ")
-    # )
-    # control_cost = float(input("Enter the cost of implementing controls: "))
+    AV = float(input("Enter the Asset Value (AV): "))
+    EF = float(input("Enter the Exposure Factor (EF) between 0 and 1: "))
+    ARO = float(input("Enter the Annual Rate of Occurrence (ARO): "))
+    reduction_percentage = float(
+        input("Enter the Percentage reduction after controls (%): ")
+    )
+    control_cost = float(input("Enter the cost of implementing controls: "))
 
     # Hardcoded inputs for testing
-    AV, EF, ARO, reduction_percentage, control_cost = 100000, 0.5, 5, 80, 10000
+    # AV, EF, ARO, reduction_percentage, control_cost = 100000, 0.5, 5, -500, 10000
 
     # Plot the risk calculation with controls
     test = plot_risk_calculation_with_controls(
-        AV, EF, ARO, reduction_percentage, control_cost, plot=False
+        AV, EF, ARO, reduction_percentage, control_cost, plot=True
     )
-    with open("risk_simulation_results.json", "w") as f:
-        json.dump(test, f, indent=4)
+    # with open("risk_simulation_results.json", "w") as f:
+    #     json.dump(test, f, indent=4)
 
 
 if __name__ == "__main__":
