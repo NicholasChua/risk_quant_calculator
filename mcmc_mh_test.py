@@ -6,19 +6,18 @@ from scipy.stats import beta
 AV = 1000000  # Asset Value in dollars
 EF = 0.2  # Exposure Factor
 ARO = 1.0  # Annual Rate of Occurrence
-controls = [0.1, 0.2, 0.3, 0.5, 0.1]  # Initial percentage effectiveness of controls
+controls = [10, 20, 30, 50, 10]  # Initial percentage effectiveness of controls
 alpha, beta_params = 0.5, 0.5  # Beta distribution params for priors
 num_years = len(controls)
 num_samples = 1000  # Number of MCMC iterations
 
 
-# Define cumulative effectiveness
 def cumulative_effectiveness(control_effectiveness):
     """Calculate cascading effect of controls.
     Each control reduces the remaining risk from previous controls."""
     remaining_risk = 1.0
     for control in control_effectiveness:
-        remaining_risk *= 1.0 - control
+        remaining_risk *= 1.0 - (control / 100.0)
     return 1.0 - remaining_risk
 
 
@@ -29,7 +28,7 @@ def yearly_loss(control_effectiveness):
     losses = []
 
     for control in control_effectiveness:
-        remaining_risk *= 1.0 - control
+        remaining_risk *= 1.0 - (control / 100.0)
         losses.append(initial_loss * remaining_risk)
     return losses
 
@@ -88,17 +87,21 @@ def metropolis_hastings(
     current_state = np.array(initial_controls)
 
     for _ in range(num_samples):
-        # Propose new controls with small noise
-        proposal = current_state + np.random.normal(0, 0.01, size=len(initial_controls))
-        proposal = np.clip(proposal, 1e-10, 1 - 1e-10)  # Avoid boundary values
+        # Propose new controls with scaled noise
+        proposal = current_state + np.random.normal(0, 1.0, size=len(initial_controls))
+        proposal = np.clip(proposal, 0, 100)  # Clip to valid percentage range
+
+        # Convert to decimal for beta distribution
+        current_decimal = current_state / 100.0
+        proposal_decimal = proposal / 100.0
 
         # Calculate log probabilities
         try:
             current_log_prior = np.sum(
-                [beta.logpdf(e, alpha, beta_params) for e in current_state]
+                [beta.logpdf(e, alpha, beta_params) for e in current_decimal]
             )
             proposal_log_prior = np.sum(
-                [beta.logpdf(e, alpha, beta_params) for e in proposal]
+                [beta.logpdf(e, alpha, beta_params) for e in proposal_decimal]
             )
 
             # Calculate acceptance ratio in log space

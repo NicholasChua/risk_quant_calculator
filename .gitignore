@@ -164,3 +164,4 @@ cython_debug/
 # Project
 .vscode/
 *.json
+*.png

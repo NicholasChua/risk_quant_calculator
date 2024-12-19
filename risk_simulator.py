@@ -4,8 +4,10 @@ from scipy import stats
 from scipy.stats import beta, poisson, gaussian_kde
 import json
 
+from mcmc_verification import verify_mcmc_implementation
+
 MONTE_CARLO_SEED = 42
-NUM_SIMULATIONS = 100000
+NUM_SIMULATIONS = 10000
 KURTOSIS = 1.7  # Default value is 3
 CURRENCY_SYMBOL = "\\$"
 
@@ -13,7 +15,7 @@ CURRENCY_SYMBOL = "\\$"
 def get_beta_parameters_for_kurtosis(kurtosis: int) -> tuple[float, float]:
     """Helper function to estimate parameters 'a' and 'b' for the beta distribution to achieve a desired kurtosis.
 
-    This is a simplified heuristic mapping of kurtosis values to beta distribution parameters since the actual implementation involves math way beyond my pay grade/education level, and also runs too slowly for interactive use.
+    This is a simplified heuristic mapping of kurtosis values to beta distribution parameters since the actual implementation involves math way beyond my pay grade/education level, and the actual implementation also runs too slowly for interactive use.
 
     Args:
         kurtosis: The desired kurtosis value for the distribution.
@@ -32,6 +34,30 @@ def get_beta_parameters_for_kurtosis(kurtosis: int) -> tuple[float, float]:
         a = b = 5  # Even lower kurtosis
 
     return a, b
+
+
+def calculate_sle_ale(
+    asset_value: float, exposure_factor: float, annual_rate_of_occurrence: float
+) -> tuple[float, float]:
+    """Helper function to calculate Single Loss Expectancy (SLE) and Annualized Loss Expectancy (ALE) for a given asset.
+
+    Single Loss Expectancy (SLE) is the expected monetary loss every time a risk event occurs.
+
+    Annualized Loss Expectancy (ALE) is the expected monetary loss that can be expected for a year.
+
+    Args:
+        asset_value: The value of the asset at risk
+        exposure_factor: The percentage of asset value at risk
+        annual_rate_of_occurrence: The frequency of the risk event
+
+    Returns:
+        tuple[float, float]: A tuple containing:
+            - The Single Loss Expectancy (SLE)
+            - The Annualized Loss Expectancy (ALE)
+    """
+    SLE = asset_value * exposure_factor
+    ALE = SLE * annual_rate_of_occurrence
+    return SLE, ALE
 
 
 def find_first_non_zero_percentile(
@@ -79,7 +105,7 @@ def _validate_simulation_params(**kwargs) -> None:
 
     Checks the following parameters:
         - exposure_factor: Must be between 0 and 1
-        - reduction_percentage: Must be between 0 and 100 (exclusive)
+        - reduction_percentage: Must be 99 or less
         - annual_rate_of_occurrence: Must be positive
         - asset_value: Must be positive
         - kurtosis: Must be positive
@@ -99,7 +125,7 @@ def _validate_simulation_params(**kwargs) -> None:
         "reduction_percentage": (
             lambda x: x <= 99,
             "must be 99 or less",
-        ), # Allow negative values to model increase in risk, disallow 100 as it is risk avoidance and not risk reduction
+        ),  # Allow negative values to model increase in risk, disallow 100 as it is risk avoidance and not risk reduction
         "annual_rate_of_occurrence": (lambda x: x >= 0, "must be a positive value"),
         "asset_value": (lambda x: x >= 0, "must be a positive value"),
         "kurtosis": (lambda x: x >= 0, "must be a positive value"),
@@ -114,13 +140,13 @@ def _validate_simulation_params(**kwargs) -> None:
             raise ValueError(f"{param} {message}")
 
 
-def _simulate_losses(
+def _simulate_losses_monte_carlo(
     asset_value: float,
     exposure_factor: float,
     annual_rate_of_occurrence: float,
     num_simulations: int,
     kurtosis: int,
-) -> tuple[np.ndarray, np.ndarray, float, float]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Helper function to simulate losses using Monte Carlo simulation.
 
     Args:
@@ -134,13 +160,7 @@ def _simulate_losses(
         tuple containing:
         - simulated losses array
         - simulated EF array
-        - single loss expectancy
-        - annualized loss expectancy
     """
-    # Calculate SLE and ALE
-    single_loss_expectancy = asset_value * exposure_factor
-    annualized_loss_expectancy = annual_rate_of_occurrence * single_loss_expectancy
-
     # Get beta distribution parameters
     alpha, beta_param = get_beta_parameters_for_kurtosis(kurtosis)
 
@@ -151,11 +171,115 @@ def _simulate_losses(
     # Calculate losses
     losses = asset_value * simulated_EF * simulated_ARO
 
-    return losses, simulated_EF, single_loss_expectancy, annualized_loss_expectancy
+    return losses, simulated_EF
+
+
+def metropolis_hastings(
+    num_samples: int, initial_control: float, alpha: float, beta_param: float
+) -> np.ndarray:
+    """Metropolis-Hastings algorithm to generate control effectiveness samples between 0 and 1.
+
+    Args:
+        num_samples: Number of MCMC samples to generate
+        initial_control: Starting control effectiveness value (decimal between 0 and 1)
+        alpha: Beta distribution alpha parameter
+        beta_param: Beta distribution beta parameter
+
+    Returns:
+        np.ndarray: Samples of control effectiveness values (decimals between 0 and 1)
+    """
+    # Validate parameters
+    if alpha <= 0 or beta_param <= 0:
+        raise ValueError("Alpha and beta parameters must be positive")
+
+    samples = []
+    current_state = initial_control
+    step_size = 0.05  # Adjusted step size for better convergence
+
+    for _ in range(num_samples):
+        # Propose new control effectiveness with scaled noise
+        proposal = current_state + step_size * np.random.normal(0, 1.0)
+        proposal = np.clip(
+            proposal, 0.0001, 0.9999
+        )  # Avoid exactly 0 or 1 for Beta distribution
+
+        # Calculate log probabilities
+        try:
+            current_log_prob = beta.logpdf(current_state, alpha, beta_param)
+            proposal_log_prob = beta.logpdf(proposal, alpha, beta_param)
+
+            # Calculate acceptance ratio in log space
+            log_acceptance_ratio = proposal_log_prob - current_log_prob
+
+            # Accept/reject the proposal
+            if np.log(np.random.rand()) < log_acceptance_ratio:
+                current_state = proposal
+        except:
+            continue  # Skip invalid proposals
+
+        samples.append(current_state)
+
+    return np.array(samples)
+
+
+def _simulate_losses_with_mcmc(
+    asset_value: float,
+    exposure_factor: float,
+    annual_rate_of_occurrence: float,
+    num_simulations: int,
+    kurtosis: int,
+    reduction_percentage: float,
+) -> np.ndarray:
+    """Helper function to simulate losses using Markov Chain Monte Carlo to model control effectiveness. This method uses Metroplis-Hastings algorithm to generate control effectiveness samples and apply them to the exposure factor.
+
+    Args:
+        asset_value: The value of the asset at risk
+        exposure_factor: The percentage of asset value at risk
+        annual_rate_of_occurrence: The frequency of the risk event
+        num_simulations: Number of simulations to run
+        kurtosis: Kurtosis value for beta distribution
+        reduction_percentage: Initial control effectiveness percentage
+
+    Returns:
+        np.ndarray: Array of simulated losses
+    """
+    # Convert reduction percentage to decimal
+    initial_control = reduction_percentage / 100.0
+
+    # Get beta distribution parameters for control effectiveness distribution
+    alpha, beta_param = get_beta_parameters_for_kurtosis(kurtosis)
+
+    # Generate base ARO samples
+    aro_samples = poisson(mu=annual_rate_of_occurrence).rvs(num_simulations)
+
+    # Run Metropolis-Hastings to generate control effectiveness samples
+    control_samples = metropolis_hastings(
+        num_simulations,
+        initial_control,  # Single control with initial effectiveness
+        alpha,
+        beta_param,
+    )
+
+    # Extract control effectiveness values
+    control_effectiveness = control_samples.flatten()
+
+    # verify_mcmc_implementation(control_effectiveness, num_simulations) # Debug code
+
+    # Generate exposure factor samples
+    simulated_ef = beta(a=alpha, b=beta_param).rvs(num_simulations)
+
+    # Apply controls to both EF and ARO
+    adjusted_ef = simulated_ef * (1 - control_effectiveness)
+    adjusted_aro = aro_samples * (1 - control_effectiveness)
+
+    # Calculate final losses
+    losses = asset_value * adjusted_ef * adjusted_aro
+
+    return losses
 
 
 def _calculate_statistics(losses: np.ndarray) -> dict:
-    """Calculate comprehensive statistics for loss distribution.
+    """Helper function to calculate comprehensive statistics for loss distribution.
 
     Args:
         losses: Array of simulated losses
@@ -190,7 +314,7 @@ def _plot_risk_distribution(
     num_simulations: int = NUM_SIMULATIONS,
     currency_symbol: str = CURRENCY_SYMBOL,
 ) -> None:
-    """Plot risk distribution histogram with KDE curves.
+    """Helper function to plot risk distribution histogram with KDE curves.
 
     Args:
         ax: Matplotlib axes to plot on
@@ -251,10 +375,10 @@ def _plot_risk_distribution(
 
 
 def _calculate_exceedance_probabilities(losses: np.ndarray) -> np.ndarray:
-    """Calculate exceedance probabilities for a given array of losses.
+    """Helper function to calculate exceedance probabilities for a given array of losses.
 
     Args:
-        losses: Array of losses
+        losses: Numpy array of losses
 
     Returns:
         np.ndarray: Exceedance probabilities
@@ -269,7 +393,7 @@ def _plot_exceedance_curve(
     adjusted_losses: np.ndarray | None = None,
     currency_symbol: str = CURRENCY_SYMBOL,
 ) -> None:
-    """Plot loss exceedance curve.
+    """Helper function to plot loss exceedance curve.
 
     Args:
         ax: Matplotlib axes to plot on
@@ -310,7 +434,7 @@ def _plot_exceedance_curve(
     ax.grid(True)
 
 
-def plot_risk_calculation_with_controls(
+def plot_risk_calculation_before_after(
     asset_value: float,
     exposure_factor: float,
     annual_rate_of_occurrence: float,
@@ -322,7 +446,7 @@ def plot_risk_calculation_with_controls(
     kurtosis: int = KURTOSIS,
     currency_symbol: str = CURRENCY_SYMBOL,
 ) -> None | dict:
-    """Estimate the mean loss and the effectiveness of risk controls using Monte Carlo simulations for a before-and-after scenario.
+    """Estimate the mean loss and the effectiveness of risk controls using Markov Chain Monte Carlo simulations for a before-and-after scenario.
 
     This function simulates the potential losses to an asset based on a given exposure factor (EF) and annual rate of occurrence (ARO) for a specific asset value (AV). It then simulates the impact of risk reduction controls that lower the ARO and calculates how these controls reduce potential losses. It provides a risk distribution and a loss exceedance curve both before and after controls are applied. The statistics and simulation results are either plotted or returned as a dictionary.
 
@@ -374,21 +498,32 @@ def plot_risk_calculation_with_controls(
     # Set seed for reproducibility
     np.random.seed(monte_carlo_seed)
 
-    # Simulate losses before controls
-    losses, _, single_loss_expectancy, annualized_loss_expectancy = _simulate_losses(
-        asset_value,
-        exposure_factor,
-        annual_rate_of_occurrence,
-        num_simulations,
-        kurtosis,
+    # Calculate SLE and ALE
+    single_loss_expectancy, annualized_loss_expectancy = calculate_sle_ale(
+        asset_value, exposure_factor, annual_rate_of_occurrence
+    )
+
+    # Simulate loss in the before scenario with MCMC
+    losses = _simulate_losses_with_mcmc(
+        asset_value=asset_value,
+        exposure_factor=exposure_factor,
+        annual_rate_of_occurrence=annual_rate_of_occurrence,
+        num_simulations=num_simulations,
+        kurtosis=kurtosis,
+        reduction_percentage=0,
     )
 
     # Adjusted ARO after controls
     adjusted_ARO = annual_rate_of_occurrence * (1 - reduction_percentage / 100)
 
-    # Simulate losses after controls
-    adjusted_losses, _, _, _ = _simulate_losses(
-        asset_value, exposure_factor, adjusted_ARO, num_simulations, kurtosis
+    # Simulate losses in the after scenario with MCMC
+    adjusted_losses = _simulate_losses_with_mcmc(
+        asset_value=asset_value,
+        exposure_factor=exposure_factor,
+        annual_rate_of_occurrence=annual_rate_of_occurrence,
+        num_simulations=num_simulations,
+        kurtosis=kurtosis,
+        reduction_percentage=reduction_percentage,
     )
 
     # Calculate statistics before and after controls
@@ -464,7 +599,7 @@ def plot_risk_calculation_with_controls(
         ]
 
         # Conditionally add the 1st percentile if it is non-zero (otherwise use the first non-zero value)
-        if calc_adjusted_stats["1st Percentile"] > 0:
+        if round(calc_adjusted_stats["1st Percentile"], 2) > 0:
             after_controls_lines.append(
                 f'1st Percentile: {currency_symbol}{calc_adjusted_stats["1st Percentile"]:,.2f}'
             )
@@ -627,13 +762,13 @@ def main():
     control_cost = float(input("Enter the cost of implementing controls: "))
 
     # Hardcoded inputs for testing
-    # AV, EF, ARO, reduction_percentage, control_cost = 100000, 0.5, 5, -500, 10000
+    # AV, EF, ARO, reduction_percentage, control_cost = 100000, 0.5, 2, 50, 10000
 
-    # Plot the risk calculation with controls
-    test = plot_risk_calculation_with_controls(
+    # Plot the risk calculation for a before-and-after scenario
+    test = plot_risk_calculation_before_after(
         AV, EF, ARO, reduction_percentage, control_cost, plot=True
     )
-    # with open("risk_simulation_results.json", "w") as f:
+    # with open("risk_simulation_results_mcmc.json", "w") as f:
     #     json.dump(test, f, indent=4)
 
 
