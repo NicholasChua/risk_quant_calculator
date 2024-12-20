@@ -8,7 +8,7 @@ import json
 from mcmc_verification import verify_mcmc_implementation
 
 MONTE_CARLO_SEED = 42
-NUM_SIMULATIONS = 10000
+NUM_SIMULATIONS = 100000
 KURTOSIS = 1.7  # Default value is 3
 CURRENCY_SYMBOL = "\\$"
 
@@ -130,8 +130,8 @@ def find_first_non_zero_percentile(
     Considers a value non-zero if it rounds to non-zero at specified decimal places.
 
     Args:
-        data: numpy array of numeric values to analyze
-        decimal_places: number of decimal places to consider for zero comparison (default: 2)
+        data: Numpy array of numeric values to analyze.
+        decimal_places: Number of decimal places to consider for zero comparison (default: 2).
 
     Returns:
         tuple[float, float]: A tuple containing:
@@ -139,8 +139,8 @@ def find_first_non_zero_percentile(
             - The first non-zero value found
 
     Raises:
-        TypeError: If input is not a numpy array
-        ValueError: If array is empty or decimal_places is negative
+        TypeError: If input is not a numpy array.
+        ValueError: If array is empty or decimal_places is negative.
     """
     if not isinstance(data, np.ndarray):
         raise TypeError("Input must be a numpy array")
@@ -203,6 +203,7 @@ def _validate_simulation_params(**kwargs) -> None:
             raise ValueError(f"{param} {message}")
 
 
+# TODO: Check if EF is unused
 def _simulate_losses_monte_carlo(
     asset_value: float,
     exposure_factor: float,
@@ -243,13 +244,16 @@ def metropolis_hastings(
     """Metropolis-Hastings algorithm to generate control effectiveness samples between 0 and 1.
 
     Args:
-        num_samples: Number of MCMC samples to generate
-        initial_control: Starting control effectiveness value (decimal between 0 and 1)
-        alpha: Beta distribution alpha parameter
-        beta_param: Beta distribution beta parameter
+        num_samples: Number of MCMC samples to generate.
+        initial_control: Starting control effectiveness value (decimal between 0 and 1).
+        alpha: Beta distribution alpha parameter.
+        beta_param: Beta distribution beta parameter.
 
     Returns:
-        np.ndarray: Samples of control effectiveness values (decimals between 0 and 1)
+        np.ndarray: Samples of control effectiveness values (decimals between 0 and 1).
+
+    Raises:
+        ValueError: If alpha or beta_param are non-positive.
     """
     # Validate parameters
     if alpha <= 0 or beta_param <= 0:
@@ -285,6 +289,7 @@ def metropolis_hastings(
     return np.array(samples)
 
 
+# TODO: Check if EF is unused
 def _simulate_losses_with_mcmc(
     asset_value: float,
     exposure_factor: float,
@@ -296,15 +301,15 @@ def _simulate_losses_with_mcmc(
     """Helper function to simulate losses using Markov Chain Monte Carlo to model control effectiveness. This method uses Metroplis-Hastings algorithm to generate control effectiveness samples and apply them to the exposure factor.
 
     Args:
-        asset_value: The value of the asset at risk
-        exposure_factor: The percentage of asset value at risk
-        annual_rate_of_occurrence: The frequency of the risk event
-        num_simulations: Number of simulations to run
-        kurtosis: Kurtosis value for beta distribution
-        reduction_percentage: Initial control effectiveness percentage
+        asset_value: The value of the asset at risk.
+        exposure_factor: The percentage of asset value at risk.
+        annual_rate_of_occurrence: The frequency of the risk event.
+        num_simulations: Number of simulations to run.
+        kurtosis: Kurtosis value for beta distribution.
+        reduction_percentage: Initial control effectiveness percentage.
 
     Returns:
-        np.ndarray: Array of simulated losses
+        np.ndarray: Array of simulated losses.
     """
     # Convert reduction percentage to decimal
     initial_control = reduction_percentage / 100.0
@@ -341,19 +346,37 @@ def _simulate_losses_with_mcmc(
     return losses
 
 
+def _calculate_mode_percentage(losses: np.ndarray) -> tuple[float, float]:
+    """Helper function to calculate the mode and its percentage occurrence.
+
+    Args:
+        losses: Array of simulated losses.
+
+    Returns:
+        tuple[float, float]: The mode and its percentage occurrence.
+    """
+    hist, bins = np.histogram(losses, bins=100)
+    mode_index = np.argmax(hist)
+    mode = (bins[mode_index] + bins[mode_index + 1]) / 2
+    mode_percentage = (hist[mode_index] / len(losses)) * 100
+    return mode, mode_percentage
+
+
 def _calculate_statistics(losses: np.ndarray) -> dict:
     """Helper function to calculate comprehensive statistics for loss distribution.
 
     Args:
-        losses: Array of simulated losses
+        losses: Array of simulated losses.
 
     Returns:
-        dict: Statistics including mean, median, mode, std dev, and percentiles
+        dict: Statistics including mean, median, mode, std dev, and percentiles.
     """
+    mode, mode_percentage = _calculate_mode_percentage(losses)
     stats_dict = {
         "Mean": np.mean(losses),
         "Median": np.median(losses),
-        "Mode": float(stats.mode(np.round(losses))[0]),
+        "Mode": mode,
+        "Mode Percentage": mode_percentage,
         "Std Dev": np.std(losses),
         "1st Percentile": np.percentile(losses, 1),
         "2.5th Percentile": np.percentile(losses, 2.5),
@@ -380,11 +403,11 @@ def _plot_risk_distribution(
     """Helper function to plot risk distribution histogram with KDE curves.
 
     Args:
-        ax: Matplotlib axes to plot on
-        losses: Array of losses before controls
-        adjusted_losses: Optional array of losses after controls
-        num_simulations: Number of simulations run
-        currency_symbol: Currency symbol for formatting
+        ax: Matplotlib axes to plot on.
+        losses: Array of losses before controls.
+        adjusted_losses: Optional array of losses after controls.
+        num_simulations: Number of simulations run.
+        currency_symbol: Currency symbol for formatting.
     """
     bins = np.linspace(
         0,
@@ -441,10 +464,10 @@ def _calculate_exceedance_probabilities(losses: np.ndarray) -> np.ndarray:
     """Helper function to calculate exceedance probabilities for a given array of losses.
 
     Args:
-        losses: Numpy array of losses
+        losses: Numpy array of losses.
 
     Returns:
-        np.ndarray: Exceedance probabilities
+        np.ndarray: Exceedance probabilities.
     """
     exceedance_prob = 100 * (1.0 - np.arange(1, len(losses) + 1) / len(losses))
     return exceedance_prob
@@ -459,10 +482,10 @@ def _plot_exceedance_curve(
     """Helper function to plot loss exceedance curve.
 
     Args:
-        ax: Matplotlib axes to plot on
-        losses: Array of losses before controls
-        adjusted_losses: Optional array of losses after controls
-        currency_symbol: Currency symbol for formatting
+        ax: Matplotlib axes to plot on.
+        losses: Array of losses before controls.
+        adjusted_losses: Optional array of losses after controls.
+        currency_symbol: Currency symbol for formatting.
     """
     # Calculate exceedance probabilities for base case
     exceedance_prob = _calculate_exceedance_probabilities(losses)
@@ -521,12 +544,12 @@ def plot_risk_calculation_before_after(
     The plot shows two main visualizations and four statistical tables:
         - **Risk Distribution**: A histogram showing the distribution of potential losses before and after controls. It also includes Kernel Density Estimation (KDE) curves to visualize the probability density of the losses.
         - **Loss Exceedance Curve**: A line plot showing the cumulative probability of exceeding a given loss amount before and after controls. It helps visualize the likelihood of different loss scenarios.
-        - **Statistical Summary Table**: Displays key statistics such as Mean, Median, Mode, Standard Deviation, Confidence Interval, and Percentiles (1%, 99%) of losses before and after controls. For the after control table, it dynamically uses *the first non-zero percentile and value* if the 2.5th percentile in the 95% CI is zero.
+        - **Statistical Summary Table**: Displays key statistics such as Mean, Median, Mode, Mode Percentage, Standard Deviation, Confidence Interval, Interquartile Range, and 99th Percentile of losses before and after controls.
         - **Input Parameters Table**: Shows the user-provided input parameters such as Asset Value (AV), Exposure Factor (EF), Annual Rate of Occurrence (ARO), Single Loss Expectancy (SLE), and Annualized Loss Expectancy (ALE) before controls.
-        - **Calculated Parameters Table**: Displays the Adjusted ARO after controls, Adjusted ALE, and the maximum acceptable cost of implementing controls based on the expected reduction in loss.
+        - **Calculated Parameters Table**: Displays the Adjusted ARO, SLE, ALE, Expected Benefit, Cost of Controls, and Return on Security Investment (ROSI) after applying controls.
 
     The JSON output includes:
-        - **Statistics**: Mean, Standard Deviation, 1st Percentile, 95% Confidence Interval (CI), and 99th Percentile of losses before and after controls. It also includes the first non-zero percentile and value after controls.
+        - **Statistics**: All the statistical values in the visualizations, and percentile values used to calculate 90, 95, and 99 confidence intervals. The first non-zero percentile and value are also included.
         - **Input Parameters**: Asset Value (AV), Exposure Factor (EF), Annual Rate of Occurrence (ARO), Single Loss Expectancy (SLE), and Annualized Loss Expectancy (ALE).
         - **Calculated Parameters**: Adjusted ARO after controls, Adjusted ALE, and the expected reduction in loss due to controls.
         - **Simulation Results**: Lists of simulated losses and exceedance probabilities before and after controls.
@@ -606,10 +629,7 @@ def plot_risk_calculation_before_after(
 
     # Calculate ROSI
     benefit = expected_reduction_in_loss
-    if cost_of_controls > 0:
-        rosi_percentage = (benefit - cost_of_controls) / cost_of_controls * 100
-    else:
-        rosi_percentage = float("inf")
+    rosi_percentage = (benefit - cost_of_controls) / cost_of_controls * 100
 
     # For after controls, 2.5% percentile is likely to be zero due to the reduction
     # Calculate the first non-zero percentile and value to show in the table instead
@@ -627,6 +647,7 @@ def plot_risk_calculation_before_after(
             "mean": float(calc_stats["Mean"]),
             "median": float(calc_stats["Median"]),
             "mode": float(calc_stats["Mode"]),
+            "mode_percentage": float(calc_stats["Mode Percentage"]),
             "std_dev": float(calc_stats["Std Dev"]),
             "percentile_1": float(calc_stats["1st Percentile"]),
             "percentile_2.5": float(calc_stats["2.5th Percentile"]),
@@ -642,6 +663,7 @@ def plot_risk_calculation_before_after(
             "mean": float(calc_adjusted_stats["Mean"]),
             "median": float(calc_adjusted_stats["Median"]),
             "mode": float(calc_adjusted_stats["Mode"]),
+            "mode_percentage": float(calc_adjusted_stats["Mode Percentage"]),
             "std_dev": float(calc_adjusted_stats["Std Dev"]),
             "percentile_1": float(calc_adjusted_stats["1st Percentile"]),
             "percentile_2.5": float(calc_adjusted_stats["2.5th Percentile"]),
@@ -698,8 +720,13 @@ def plot_risk_calculation_before_after(
             raise ValueError("Output file must be a JSON file or a PNG file")
 
     if plot:
+        # Set default figure size as 2:1 aspect ratio with 120 DPI which results in resolution of 1920x960 pixels
+        # This should be broadly compatible with most screen sizes and resolutions as of 2024
+        plt.rcParams["figure.figsize"] = [16, 8]
+        plt.rcParams["figure.dpi"] = 120
+
         # Create a figure with two subplots
-        _, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+        _, (ax1, ax2) = plt.subplots(2, 1)
 
         # Plot Risk Distribution
         _plot_risk_distribution(
@@ -722,46 +749,27 @@ def plot_risk_calculation_before_after(
                 "-------------------------------------",
                 f'Mean: {currency_symbol}{calc_stats["Mean"]:,.2f}',
                 f'Median: {currency_symbol}{calc_stats["Median"]:,.2f}',
-                f'Mode: {currency_symbol}{calc_stats["Mode"]:,.2f}',
+                f'Mode: {currency_symbol}{calc_stats["Mode"]:,.2f} ({calc_stats["Mode Percentage"]:.2f}%)',
                 f'Std Dev: {currency_symbol}{calc_stats["Std Dev"]:,.2f}',
-                f'1st Percentile: {currency_symbol}{calc_stats["1st Percentile"]:,.2f}',
-                f'95% CI: {currency_symbol}{calc_stats["2.5th Percentile"]:,.2f} - {currency_symbol}{calc_stats["97.5th Percentile"]:,.2f}',
+                f'Interquartile Range: {currency_symbol}{calc_stats["25th Percentile"]:,.2f} - {currency_symbol}{calc_stats["75th Percentile"]:,.2f}',
+                f'90% CI: {currency_symbol}{calc_stats["5th Percentile"]:,.2f} - {currency_symbol}{calc_stats["95th Percentile"]:,.2f}',
                 f'99th Percentile: {currency_symbol}{calc_stats["99th Percentile"]:,.2f}',
             ]
         )
 
-        after_controls_lines = [
-            "Statistical Summary (After Controls)",
-            "------------------------------------",
-            f'Mean: {currency_symbol}{calc_adjusted_stats["Mean"]:,.2f}',
-            f'Median: {currency_symbol}{calc_adjusted_stats["Median"]:,.2f}',
-            f'Mode: {currency_symbol}{calc_adjusted_stats["Mode"]:,.2f}',
-            f'Std Dev: {currency_symbol}{calc_adjusted_stats["Std Dev"]:,.2f}',
-        ]
-
-        # Conditionally add the 1st percentile if it is non-zero (otherwise use the first non-zero value)
-        if round(calc_adjusted_stats["1st Percentile"], 2) > 0:
-            after_controls_lines.append(
-                f'1st Percentile: {currency_symbol}{calc_adjusted_stats["1st Percentile"]:,.2f}'
-            )
-            after_controls_lines.append(
-                f'95% CI: {currency_symbol}{calc_adjusted_stats["2.5th Percentile"]:,.2f} - {currency_symbol}{calc_adjusted_stats["97.5th Percentile"]:,.2f}'
-            )
-        else:
-            after_controls_lines.append(
-                f'{calc_adjusted_stats["First Non-Zero Percentile"]:.1f}th Percentile: {currency_symbol}{calc_adjusted_stats["First Non-Zero Value"]:,.2f}'
-            )
-            after_controls_lines.append(
-                f'CI {calc_adjusted_stats["First Non-Zero Percentile"]:.1f}%-95%: {currency_symbol}{calc_adjusted_stats["First Non-Zero Value"]:,.2f} - {currency_symbol}{calc_adjusted_stats["97.5th Percentile"]:,.2f}'
-            )
-
-        after_controls_lines.extend(
+        after_controls_text = "\n".join(
             [
+                "Statistical Summary (After Controls)",
+                "------------------------------------",
+                f'Mean: {currency_symbol}{calc_adjusted_stats["Mean"]:,.2f}',
+                f'Median: {currency_symbol}{calc_adjusted_stats["Median"]:,.2f}',
+                f'Mode: {currency_symbol}{calc_adjusted_stats["Mode"]:,.2f} ({calc_adjusted_stats["Mode Percentage"]:.2f}%)',
+                f'Std Dev: {currency_symbol}{calc_adjusted_stats["Std Dev"]:,.2f}',
+                f'Interquartile Range: {currency_symbol}{calc_adjusted_stats["25th Percentile"]:,.2f} - {currency_symbol}{calc_adjusted_stats["75th Percentile"]:,.2f}',
+                f'90% CI: {currency_symbol}{calc_adjusted_stats["5th Percentile"]:,.2f} - {currency_symbol}{calc_adjusted_stats["95th Percentile"]:,.2f}',
                 f'99th Percentile: {currency_symbol}{calc_adjusted_stats["99th Percentile"]:,.2f}',
             ]
         )
-
-        after_controls_text = "\n".join(after_controls_lines)
 
         # Display user input parameters before controls
         input_parameters = "\n".join(
@@ -782,7 +790,8 @@ def plot_risk_calculation_before_after(
                 "Calculated Parameters (After Controls)",
                 "-------------------------------",
                 f"ARO after {reduction_percentage:.0f}% reduction: {adjusted_ARO:.2f}",
-                f"Annualized Loss Expectancy (ALE): {currency_symbol}{annualized_loss_expectancy * (1 - reduction_percentage/100):,.2f}",
+                f"New SLE: {currency_symbol}{single_loss_expectancy * (1 - reduction_percentage/100):,.2f}",
+                f"New ALE: {currency_symbol}{annualized_loss_expectancy * (1 - reduction_percentage/100):,.2f}",
                 f"Expected Benefit: {currency_symbol}{benefit:,.2f}",
                 f"Cost of Controls: {currency_symbol}{cost_of_controls:,.2f}",
                 f"ROSI: {rosi_percentage:,.2f}%",
@@ -826,12 +835,13 @@ def plot_risk_calculation_before_after(
         plt.tight_layout()
         plt.subplots_adjust(bottom=0.25, hspace=0.25)  # Make room for the tables
 
+        # Save or display the plot
         if plot_file_name is not None:
-            # Save the plot as a 1920x1080 image
-            plt.gcf().set_size_inches(16, 9)
             plt.savefig(plot_file_name, dpi=120, bbox_inches="tight")
         else:
             plt.show()
+
+    return None
 
 
 def main():
@@ -848,7 +858,7 @@ def main():
             item["percentage_reduction"],
             item["cost_of_control"],
             plot=True,
-            output_file=f"output_{item['id']}.png",
+            output_file=f"output_{item['id']}.json",
         )
 
 
