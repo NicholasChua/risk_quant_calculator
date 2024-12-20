@@ -1,0 +1,20 @@
+{
+    "data": [
+        {
+            "id": 1,
+            "asset_value": 100000,
+            "exposure_factor": 0.5,
+            "annual_rate_of_occurrence": 2,
+            "percentage_reduction": 50,
+            "cost_of_control": 10000
+        },
+        {
+            "id": 2, 
+            "asset_value": 200000,
+            "exposure_factor": 0.5,
+            "annual_rate_of_occurrence": 2,
+            "percentage_reduction": 50,
+            "cost_of_control": 10000
+        }
+    ]
+}

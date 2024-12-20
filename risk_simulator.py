@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
 from scipy.stats import beta, poisson, gaussian_kde
+import csv
 import json
 
 from mcmc_verification import verify_mcmc_implementation
@@ -10,6 +11,68 @@ MONTE_CARLO_SEED = 42
 NUM_SIMULATIONS = 10000
 KURTOSIS = 1.7  # Default value is 3
 CURRENCY_SYMBOL = "\\$"
+
+
+def load_csv_data(file_path: str) -> dict[str, list[float]]:
+    """Helper function to load data from a CSV file containing input parameters for the risk calculation.
+
+    The CSV file should have the following columns in order:
+        - id
+        - asset_value
+        - exposure_factor
+        - annual_rate_of_occurrence
+        - percentage_reduction
+        - cost_of_control
+
+    Args:
+        file_path: The path to the CSV file.
+
+    Returns:
+        dict[str, list[dict]]: A dictionary with 'data' key containing list of risk dictionaries.
+    """
+    result = {"data": []}
+
+    with open(file_path, "r") as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            risk = {
+                "id": int(row["id"]),
+                "asset_value": float(row["asset_value"]),
+                "exposure_factor": float(row["exposure_factor"]),
+                "annual_rate_of_occurrence": float(row["annual_rate_of_occurrence"]),
+                "percentage_reduction": float(row["percentage_reduction"]),
+                "cost_of_control": float(row["cost_of_control"]),
+            }
+            result["data"].append(risk)
+
+    return result
+
+
+def load_json_data(file_path: str) -> dict[str, list[float]]:
+    """Helper function to load data from a JSON file containing input parameters for the risk calculation.
+
+    Args:
+        file_path: The path to the JSON file.
+
+    Returns:
+        dict: A dictionary containing the input parameters for the risk calculation.
+    """
+    float_fields = [
+        "asset_value",
+        "exposure_factor",
+        "annual_rate_of_occurrence",
+        "percentage_reduction",
+        "cost_of_control",
+    ]
+
+    with open(file_path, "r") as file:
+        data = json.load(file)
+
+    for risk in data["data"]:
+        for field in float_fields:
+            risk[field] = float(risk[field])
+
+    return data
 
 
 def get_beta_parameters_for_kurtosis(kurtosis: int) -> tuple[float, float]:
@@ -441,12 +504,13 @@ def plot_risk_calculation_before_after(
     reduction_percentage: float,
     cost_of_controls: float,
     plot: bool = True,
+    output_file: str | None = None,
     monte_carlo_seed: int = MONTE_CARLO_SEED,
     num_simulations: int = NUM_SIMULATIONS,
     kurtosis: int = KURTOSIS,
     currency_symbol: str = CURRENCY_SYMBOL,
 ) -> None | dict:
-    """Estimate the mean loss and the effectiveness of risk controls using Markov Chain Monte Carlo simulations for a before-and-after scenario.
+    """Estimate the mean loss and the effectiveness of risk controls using simulations: Monte Carlo for a before scenario and Markov Chain Monte Carlo for an after scenario.
 
     This function simulates the potential losses to an asset based on a given exposure factor (EF) and annual rate of occurrence (ARO) for a specific asset value (AV). It then simulates the impact of risk reduction controls that lower the ARO and calculates how these controls reduce potential losses. It provides a risk distribution and a loss exceedance curve both before and after controls are applied. The statistics and simulation results are either plotted or returned as a dictionary.
 
@@ -473,14 +537,15 @@ def plot_risk_calculation_before_after(
         annual_rate_of_occurrence: The frequency of the risk event over a year, expressed as a decimal.
         reduction_percentage: The percentage reduction in the ARO after applying risk controls, expressed as a percentage.
         cost_of_controls: The cost of implementing the risk controls, expressed in monetary units.
-        plot: A boolean indicating whether to plot the results (default is True).
+        plot: A boolean indicating whether to plot the results (default is True). Set to True if output_file ends with '.png'.
+        output_file: The path to save the output file as either a JSON or PNG file. If it ends with '.png', plot is set to True and the plot is saved to the file. If None, the output is a dictionary instead of a file (default is None).
         monte_carlo_seed: The seed for the Monte Carlo simulation to ensure reproducibility (default is constant MONTE_CARLO_SEED).
         num_simulations: The number of simulations to run for the Monte Carlo analysis (default is constant NUM_SIMULATIONS).
         kurtosis: The kurtosis value to adjust the shape of the beta distribution for the EF (default is constant KURTOSIS).
         currency_symbol: The currency symbol to use in the plot displays. (default is constant CURRENCY_SYMBOL).
 
     Returns:
-        dict | None: A dictionary containing the statistics, input parameters, calculated parameters, and simulation results if plot is False. If plot is True, the function displays the visualizations and tables without returning a dictionary.
+        dict | None: If output_file is None, returns a dictionary containing the statistics and simulation results. If output_file is provided, returns None.
     """
     # Input validation
     _validate_simulation_params(
@@ -503,14 +568,14 @@ def plot_risk_calculation_before_after(
         asset_value, exposure_factor, annual_rate_of_occurrence
     )
 
-    # Simulate loss in the before scenario with MCMC
-    losses = _simulate_losses_with_mcmc(
+    # Simulate losses in the before scenario with Monte Carlo
+    # The before state is well defined as a 0% reduction scenario so we can use the simpler Monte Carlo method to save time
+    losses, _ = _simulate_losses_monte_carlo(
         asset_value=asset_value,
         exposure_factor=exposure_factor,
         annual_rate_of_occurrence=annual_rate_of_occurrence,
         num_simulations=num_simulations,
         kurtosis=kurtosis,
-        reduction_percentage=0,
     )
 
     # Adjusted ARO after controls
@@ -555,6 +620,82 @@ def plot_risk_calculation_before_after(
     calc_adjusted_stats["First Non-Zero Value"] = first_nonzero_val
 
     nonzero_adjusted_losses = adjusted_losses[adjusted_losses > 0]
+
+    # Output results as a dictionary or save to a file
+    return_data = {
+        "before_controls_stats": {
+            "mean": float(calc_stats["Mean"]),
+            "median": float(calc_stats["Median"]),
+            "mode": float(calc_stats["Mode"]),
+            "std_dev": float(calc_stats["Std Dev"]),
+            "percentile_1": float(calc_stats["1st Percentile"]),
+            "percentile_2.5": float(calc_stats["2.5th Percentile"]),
+            "percentile_5": float(calc_stats["5th Percentile"]),
+            "percentile_10": float(calc_stats["10th Percentile"]),
+            "percentile_25": float(calc_stats["25th Percentile"]),
+            "percentile_75": float(calc_stats["75th Percentile"]),
+            "percentile_90": float(calc_stats["90th Percentile"]),
+            "percentile_97.5": float(calc_stats["97.5th Percentile"]),
+            "percentile_99": float(calc_stats["99th Percentile"]),
+        },
+        "after_controls_stats": {
+            "mean": float(calc_adjusted_stats["Mean"]),
+            "median": float(calc_adjusted_stats["Median"]),
+            "mode": float(calc_adjusted_stats["Mode"]),
+            "std_dev": float(calc_adjusted_stats["Std Dev"]),
+            "percentile_1": float(calc_adjusted_stats["1st Percentile"]),
+            "percentile_2.5": float(calc_adjusted_stats["2.5th Percentile"]),
+            "percentile_5": float(calc_adjusted_stats["5th Percentile"]),
+            "percentile_10": float(calc_adjusted_stats["10th Percentile"]),
+            "percentile_25": float(calc_adjusted_stats["25th Percentile"]),
+            "percentile_75": float(calc_adjusted_stats["75th Percentile"]),
+            "percentile_90": float(calc_adjusted_stats["90th Percentile"]),
+            "percentile_97.5": float(calc_adjusted_stats["97.5th Percentile"]),
+            "percentile_99": float(calc_adjusted_stats["99th Percentile"]),
+            "first_nonzero_percentile": float(
+                calc_adjusted_stats["First Non-Zero Percentile"]
+            ),
+            "first_nonzero_value": float(calc_adjusted_stats["First Non-Zero Value"]),
+        },
+        "input_parameters": {
+            "asset_value": float(asset_value),
+            "exposure_factor": float(exposure_factor),
+            "annual_rate_of_occurrence": float(annual_rate_of_occurrence),
+            "single_loss_expectancy": float(single_loss_expectancy),
+            "annualized_loss_expectancy": float(annualized_loss_expectancy),
+        },
+        "calculated_parameters": {
+            "adjusted_aro": round(adjusted_ARO, 4),
+            "adjusted_ale": round(
+                annualized_loss_expectancy * (1 - reduction_percentage / 100), 2
+            ),
+            "reduction_percentage": round(reduction_percentage, 2),
+            "expected_benefit": round(benefit, 2),
+            "cost_of_controls": round(cost_of_controls, 2),
+            "rosi_percentage": round(rosi_percentage, 2),
+        },
+        "simulation_results": {
+            "losses": losses.tolist(),
+            "adjusted_losses": nonzero_adjusted_losses.tolist(),  # Filter out zero values
+            "exceedance_probabilities": exceedance_prob.tolist(),
+            "adjusted_exceedance_probabilities": adjusted_exceedance_prob.tolist(),
+        },
+    }
+
+    # Instantiate a variable to store the plot file name
+    plot_file_name = None
+
+    # If output file ends with .json, save as JSON, then exit without plotting. If ends with .png, use that as the plot file name.
+    if output_file:
+        if output_file.endswith(".json"):
+            with open(output_file, "w") as file:
+                json.dump(return_data, file, indent=4)
+            return None
+        elif output_file.endswith(".png"):
+            plot = True
+            plot_file_name = output_file
+        else:
+            raise ValueError("Output file must be a JSON file or a PNG file")
 
     if plot:
         # Create a figure with two subplots
@@ -684,92 +825,31 @@ def plot_risk_calculation_before_after(
         # Adjust layout to prevent overlap
         plt.tight_layout()
         plt.subplots_adjust(bottom=0.25, hspace=0.25)  # Make room for the tables
-        plt.show()
 
-    # If plot is False, return the statistics
-    else:
-        return {
-            "before_controls_stats": {
-                "mean": float(calc_stats["Mean"]),
-                "median": float(calc_stats["Median"]),
-                "mode": float(calc_stats["Mode"]),
-                "std_dev": float(calc_stats["Std Dev"]),
-                "percentile_1": float(calc_stats["1st Percentile"]),
-                "percentile_2.5": float(calc_stats["2.5th Percentile"]),
-                "percentile_5": float(calc_stats["5th Percentile"]),
-                "percentile_10": float(calc_stats["10th Percentile"]),
-                "percentile_25": float(calc_stats["25th Percentile"]),
-                "percentile_75": float(calc_stats["75th Percentile"]),
-                "percentile_90": float(calc_stats["90th Percentile"]),
-                "percentile_97.5": float(calc_stats["97.5th Percentile"]),
-                "percentile_99": float(calc_stats["99th Percentile"]),
-            },
-            "after_controls_stats": {
-                "mean": float(calc_adjusted_stats["Mean"]),
-                "median": float(calc_adjusted_stats["Median"]),
-                "mode": float(calc_adjusted_stats["Mode"]),
-                "std_dev": float(calc_adjusted_stats["Std Dev"]),
-                "percentile_1": float(calc_adjusted_stats["1st Percentile"]),
-                "percentile_2.5": float(calc_adjusted_stats["2.5th Percentile"]),
-                "percentile_5": float(calc_adjusted_stats["5th Percentile"]),
-                "percentile_10": float(calc_adjusted_stats["10th Percentile"]),
-                "percentile_25": float(calc_adjusted_stats["25th Percentile"]),
-                "percentile_75": float(calc_adjusted_stats["75th Percentile"]),
-                "percentile_90": float(calc_adjusted_stats["90th Percentile"]),
-                "percentile_97.5": float(calc_adjusted_stats["97.5th Percentile"]),
-                "percentile_99": float(calc_adjusted_stats["99th Percentile"]),
-                "first_nonzero_percentile": float(
-                    calc_adjusted_stats["First Non-Zero Percentile"]
-                ),
-                "first_nonzero_value": float(
-                    calc_adjusted_stats["First Non-Zero Value"]
-                ),
-            },
-            "input_parameters": {
-                "asset_value": float(asset_value),
-                "exposure_factor": float(exposure_factor),
-                "annual_rate_of_occurrence": float(annual_rate_of_occurrence),
-                "single_loss_expectancy": float(single_loss_expectancy),
-                "annualized_loss_expectancy": float(annualized_loss_expectancy),
-            },
-            "calculated_parameters": {
-                "adjusted_aro": round(adjusted_ARO, 4),
-                "adjusted_ale": round(
-                    annualized_loss_expectancy * (1 - reduction_percentage / 100), 2
-                ),
-                "reduction_percentage": round(reduction_percentage, 2),
-                "expected_benefit": round(benefit, 2),
-                "cost_of_controls": round(cost_of_controls, 2),
-                "rosi_percentage": round(rosi_percentage, 2),
-            },
-            "simulation_results": {
-                "losses": losses.tolist(),
-                "adjusted_losses": nonzero_adjusted_losses.tolist(),  # Filter out zero values
-                "exceedance_probabilities": exceedance_prob.tolist(),
-                "adjusted_exceedance_probabilities": adjusted_exceedance_prob.tolist(),
-            },
-        }
+        if plot_file_name is not None:
+            # Save the plot as a 1920x1080 image
+            plt.gcf().set_size_inches(16, 9)
+            plt.savefig(plot_file_name, dpi=120, bbox_inches="tight")
+        else:
+            plt.show()
 
 
 def main():
-    # Get user inputs
-    AV = float(input("Enter the Asset Value (AV): "))
-    EF = float(input("Enter the Exposure Factor (EF) between 0 and 1: "))
-    ARO = float(input("Enter the Annual Rate of Occurrence (ARO): "))
-    reduction_percentage = float(
-        input("Enter the Percentage reduction after controls (%): ")
-    )
-    control_cost = float(input("Enter the cost of implementing controls: "))
+    # Load data from JSON or CSV files
+    # data = load_json_data("input_example.json")
+    data = load_csv_data("input_example.csv")
 
-    # Hardcoded inputs for testing
-    # AV, EF, ARO, reduction_percentage, control_cost = 100000, 0.5, 2, 50, 10000
-
-    # Plot the risk calculation for a before-and-after scenario
-    test = plot_risk_calculation_before_after(
-        AV, EF, ARO, reduction_percentage, control_cost, plot=True
-    )
-    # with open("risk_simulation_results_mcmc.json", "w") as f:
-    #     json.dump(test, f, indent=4)
+    # Plot the risk calculation for a before-and-after scenario using each item in the data
+    for item in data["data"]:
+        plot_risk_calculation_before_after(
+            item["asset_value"],
+            item["exposure_factor"],
+            item["annual_rate_of_occurrence"],
+            item["percentage_reduction"],
+            item["cost_of_control"],
+            plot=True,
+            output_file=f"output_{item['id']}.png",
+        )
 
 
 if __name__ == "__main__":
