@@ -10,7 +10,7 @@
         },
         {
             "id": 2, 
-            "asset_value": 200000,
+            "asset_value": 100000,
             "exposure_factor": 0.9,
             "annual_rate_of_occurrence": 2,
             "percentage_reduction": 50,
