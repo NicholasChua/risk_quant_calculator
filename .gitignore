@@ -167,5 +167,5 @@ cython_debug/
 *.json
 *.csv
 !input_example.json
-!output_example.json
 !input_example.csv
+!readme_media/*.png
