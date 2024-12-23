@@ -27,6 +27,8 @@ pip install -r requirements.txt
 ├── .gitignore
 ├── LICENSE
 ├── README.md
+├── readme_media
+│   └── output_example_mc.png
 ├── requirements.txt
 ├── risk_simulator.py
 ├── mcmc_verification.py
