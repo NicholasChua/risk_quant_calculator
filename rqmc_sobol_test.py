@@ -16,7 +16,7 @@ ARO_RANGE = (1.5, 2.5)  # Annual rate of occurrence range
 CONTROL_REDUCTIONS = [0.2, 0.35, 0.3, 0.45]  # Reduction percentages for controls
 CONTROL_COSTS = [10000, 30000, 20000, 35000]  # Base annualized cost of controls
 COST_ADJUSTMENT_RANGE = (0.0, 0.2)  # Cost adjustment per year range
-NUM_SAMPLES = 10000  # Number of Sobol samples
+NUM_SAMPLES = 16384  # Number of Sobol samples
 NUM_YEARS = 4
 
 
