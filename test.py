@@ -17,7 +17,7 @@ CONTROL_COSTS = [10000, 30000, 20000, 35000]  # Base annualized cost of controls
 COST_ADJUSTMENT_RANGE = (0.0, 0.2)  # Cost adjustment per year range
 NUM_SAMPLES = 16384  # Number of Sobol samples
 NUM_YEARS = len(CONTROL_COSTS)  # Number of years to simulate
-KURTOSIS = 1.7
+KURTOSIS = 1.7  # Results in alpha and beta of 0.5
 
 
 # TODO: Move this to a common library file
@@ -180,6 +180,99 @@ def calculate_compounding_costs(
     return costs
 
 
+def calculate_statistics_for_permutation(costs: dict[str, dict[str, dict[str, np.float64]]], ef_samples: np.ndarray, aro_samples: np.ndarray, permutation: tuple[int], control_reductions: list = CONTROL_REDUCTIONS, num_of_simulations: int = NUM_SAMPLES) -> dict[str, float]:
+    """Given a permutation of controls, calculate the ROSI for each year and the total ROSI for the permutation
+
+    Args:
+        costs: Dictionary of costs and adjustments for each control, for each year
+        ef_samples: Simulated exposure factors
+        aro_samples: Simulated annual rates of occurrence
+        permutation: A single permutation of controls represented as a tuple of integers
+        control_reductions: List of control reduction percentages. Default is CONTROL_REDUCTIONS
+        num_of_simulations: Number of samples to simulate. Default is NUM_SAMPLES
+
+    Returns:
+        dict[str, float]: Dictionary of results for the permutation
+    """
+    # Initialize ROSI
+    rosi_per_simulation = []
+
+    for i in range(num_of_simulations):
+        rosi_per_year = []
+        results = {
+            "permutation": permutation,
+            "total_rosi": 0.0,
+        }
+
+        for year in range(len(permutation)):
+            # Retrieve the appropriate control and its cost for the year
+            control = permutation[year]
+            control_cost = costs[f"year_{year + 1}"][f"control_{control}"]["cost"]
+
+            # Calculate the total cost by summing the costs of all controls up to the current year, inclusive
+            total_cost = sum(
+                [
+                    costs[f"year_{year + 1}"][f"control_{control}"]["cost"]
+                    for control in permutation[: year + 1]
+                ]
+            )
+
+            # Calculate the new ARO after applying the control
+            aro_after = aro_samples[i][year] * (1 - control_reductions[control - 1])
+
+            # Calculate the new ALE after applying the control
+            ale_after = calculate_ale(ASSET_VALUE, ef_samples[i][year], aro_after)
+
+            # Calculate the ALE before applying the control
+            if year == 0:
+                ale_before = calculate_ale(ASSET_VALUE, ef_samples[i][year], aro_samples[i][year])
+            else:
+                ale_before = results[f"year_{year}"]["ale_after"]
+
+            # Calculate the ROSI after applying the control and save it
+            rosi = calculate_rosi(ale_before, ale_after, total_cost)
+            rosi_per_year.append(rosi)
+
+            # Add year-by-year information to the results
+            results[f"year_{year + 1}"] = {
+                "ale_before": ale_before,
+                "ale_after": ale_after,
+                "control_cost": control_cost,
+                "total_cost": total_cost,
+                "rosi": rosi,
+            }
+
+        # Calculate the total ROSI for the permutation
+        results["total_rosi"] = np.sum(rosi_per_year)
+        rosi_per_simulation.append(results["total_rosi"])
+
+    # Average the ROSI over all simulations
+    average_rosi = np.mean(rosi_per_simulation)
+    results["total_rosi"] = average_rosi
+
+    return results
+
+
+# Convert NumPy arrays to lists for JSON serialization
+def convert_to_serializable(obj: any) -> any:
+    """Recursively converts numpy arrays, dictionaries, and lists into serializable formats.
+
+    Args:
+        obj: The object to be converted. It can be a numpy array, dictionary, list, or any other type.
+
+    Returns:
+        any: The converted object in a serializable format. Numpy arrays are converted to lists, dictionaries are recursively processed, and lists are recursively processed. Other types are returned as is.
+    """
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: convert_to_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_serializable(i) for i in obj]
+    else:
+        return obj
+
+
 # Set random seed for reproducibility
 np.random.seed(RANDOM_SEED)
 
@@ -189,51 +282,36 @@ num_dimensions = 2 * NUM_YEARS
 # Generate Sobol samples for exposure factor and annual rate of occurrence
 sobol_samples = generate_sobol_samples(dimensions=num_dimensions, samples=NUM_SAMPLES)
 
-# Simulate EF and ARO using the appropriate slices of Sobol samples
-ef_samples = simulate_exposure_factor_sobol(sobol_samples[:, 0:NUM_YEARS], EF_RANGE, KURTOSIS)
-aro_samples = simulate_annual_rate_of_occurrence_sobol(sobol_samples[:, NUM_YEARS:2 * NUM_YEARS], ARO_RANGE)
+# Simulate EF and ARO using the appropriate slices of Sobol samples. All permutations use the same values for EF and ARO, thus all permutations are comparable
+ef_samples = simulate_exposure_factor_sobol(
+    sobol_samples[:, 0:NUM_YEARS], EF_RANGE, KURTOSIS
+)
+aro_samples = simulate_annual_rate_of_occurrence_sobol(
+    sobol_samples[:, NUM_YEARS : 2 * NUM_YEARS], ARO_RANGE
+)
 
 # Calculate compounding costs for each control
-control_cost_values = calculate_compounding_costs(CONTROL_COSTS, COST_ADJUSTMENT_RANGE, NUM_YEARS)
+control_cost_values = calculate_compounding_costs(
+    CONTROL_COSTS, COST_ADJUSTMENT_RANGE, NUM_YEARS
+)
 
 # Determine permutations of control orderings (starting from 1 instead of 0)
 all_permutations = list(permutations(range(1, NUM_YEARS + 1)))
-best_permutation = None
-best_rosi = -np.inf
-best_rosi_values = []
 
-# List to store ROSI values for each permutation
-all_rosi_permutations = []
+# List to store total ROSI values for each permutation after calculating all samples
+simulate_all_permutations = [
+    calculate_statistics_for_permutation(
+        control_cost_values, ef_samples, aro_samples, permutation
+    )
+    for permutation in all_permutations
+]
 
-# Evaluate each permutation
-for permutation in all_permutations:
-    # Initialize ALE and ROSI
-    ale_before = calculate_ale(ASSET_VALUE, ef_samples[0], aro_samples[0])
-    ale_previous = ale_before.copy()
-    rosi_per_year = []
-
-    for year, control in enumerate(permutation):
-        # Calculate the ALE after implementing the control
-        ale_after = calculate_ale(ASSET_VALUE, ef_samples[year], aro_samples[year])
-
-        # Calculate the ROSI after implementing the control
-        rosi = calculate_rosi(ale_previous, ale_after, control_cost_values[f"year_{year + 1}"][f"control_{control}"]["cost"])
-        rosi_per_year.append((year + 1, control, rosi))
-
-        # Update the ALE for the next iteration
-        ale_previous = ale_after
-
-    # Calculate the total ROSI for the permutation
-    total_rosi = np.sum([rosi for _, _, rosi in rosi_per_year])
-
-    # Store the ROSI values for the permutation
-    all_rosi_permutations.append((permutation, rosi_per_year))
-
-    # Update the best permutation if the current permutation has a higher total ROSI
-    if total_rosi > best_rosi:
-        best_permutation = permutation
-        best_rosi = total_rosi
-        best_rosi_values = rosi_per_year
+# Sort the permutations by total ROSI descending
+sorted_permutations = sorted(
+    simulate_all_permutations, key=lambda x: x["total_rosi"], reverse=True
+)
+best_permutation = sorted_permutations[0]["permutation"]
+best_rosi = sorted_permutations[0]["total_rosi"]
 
 # Initialize a results dictionary
 results = {
@@ -253,45 +331,16 @@ results = {
         "best_rosi": best_rosi,
         "control_cost_values": control_cost_values,
     },
-    "ranked_permutations": {
-        # Rank all tried permutations by total ROSI descending
-        "permutations": sorted(
-            [
-                {
-                    "permutation": list(permutation),
-                    "total_rosi": np.sum([rosi for _, _, rosi in rosi_values]),
-                    "rosi": {
-                        f"year_{year}": {
-                            f"control_{control}": next(
-                                (r for y, c, r in rosi_values if y == year and c == control),
-                                None
-                            )
-                            for control in range(1, NUM_YEARS + 1)
-                        }
-                        for year in range(1, NUM_YEARS + 1)
-                    }
-                }
-                for permutation, rosi_values in all_rosi_permutations
-            ],
-            key=lambda x: x["total_rosi"],
-            reverse=True
-        ),
+    "ranked_permutations": sorted_permutations,
+    "simulation_data": {
+        "ef_samples": ef_samples,
+        "aro_samples": aro_samples,
     },
 }
-
-# Convert NumPy arrays to lists for JSON serialization
-def convert_to_serializable(obj):
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, dict):
-        return {k: convert_to_serializable(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [convert_to_serializable(i) for i in obj]
-    return obj
 
 serializable_results = convert_to_serializable(results)
 
 with open("test.json", "w") as f:
     json.dump(serializable_results, f, indent=4)
 
-# TODO: Fix the rosi values in the JSON output ranked_permutations. The values are not being output correctly.
+# TODO: Add visualization of results
