@@ -1,8 +1,10 @@
 import numpy as np
-from scipy.stats import beta, poisson, qmc
+from scipy.stats import beta, poisson
 from itertools import permutations
 import matplotlib.pyplot as plt
 import json
+from SALib.sample import sobol as sobol_sample
+from SALib.analyze import sobol as sobol_analyze
 
 from risk_simulator import (
     get_beta_parameters_for_kurtosis,
@@ -10,12 +12,12 @@ from risk_simulator import (
 
 RANDOM_SEED = 42
 ASSET_VALUE = 500000
-EF_RANGE = (0.4, 0.6)  # Exposure factor range
-ARO_RANGE = (1.5, 2.5)  # Annual rate of occurrence range
+EF_RANGE = [0.4, 0.6]  # Exposure factor range
+ARO_RANGE = [1.5, 2.5]  # Annual rate of occurrence range
 CONTROL_REDUCTIONS = [0.2, 0.35, 0.3, 0.45]  # Reduction percentages for controls
 CONTROL_COSTS = [10000, 30000, 20000, 35000]  # Base annualized cost of controls
-COST_ADJUSTMENT_RANGE = (0.0, 0.2)  # Cost adjustment per year range
-NUM_SAMPLES = 16384  # Number of Sobol samples
+COST_ADJUSTMENT_RANGE = [0.0, 0.2]  # Cost adjustment per year range
+NUM_SAMPLES = 16384  # Number of Sobol samples 2^14
 NUM_YEARS = len(CONTROL_COSTS)  # Number of years to simulate
 KURTOSIS = 1.7  # Results in alpha and beta of 0.5
 
@@ -58,24 +60,8 @@ def calculate_rosi(
     return (ale_before - ale_after - total_control_costs) / total_control_costs * 100
 
 
-def generate_sobol_samples(dimensions: int, samples: int) -> np.ndarray:
-    """Generate Sobol samples using the Sobol sequence. The number of samples is rounded up to the nearest power of 2. The number of dimensions is the number of sequences to generate.
-
-    Args:
-        dimensions: Number of dimensions
-        samples: Number of samples
-
-    Returns:
-        np.ndarray: Sobol samples
-    """
-    sampler = qmc.Sobol(d=dimensions, scramble=True, seed=RANDOM_SEED)
-    # Generate Sobol samples rounded up to the nearest power of 2. Subtract 1 ensures m is the exponent for the largest power of 2 <= samples
-    sobol_samples = sampler.random_base2(m=int(samples).bit_length() - 1)
-    return sobol_samples
-
-
 def simulate_exposure_factor_sobol(
-    sobol_samples: np.ndarray, ef_range: tuple[float, float], kurtosis: int
+    sobol_samples: np.ndarray, ef_range: list[float], kurtosis: int
 ) -> np.ndarray:
     """Simulate exposure factor using Sobol samples mapped to a Beta distribution with a specified kurtosis.
 
@@ -87,8 +73,13 @@ def simulate_exposure_factor_sobol(
     Returns:
         np.ndarray: Simulated exposure factors
     """
+    # To avoid beta.ppf(0 or 1) = inf/NaN, clamp the samples:
+    eps = 1e-9
+    sobol_samples = np.clip(sobol_samples, eps, 1 - eps)
+
     # Calculate Beta parameters based on kurtosis
     alpha_param, beta_param = get_beta_parameters_for_kurtosis(kurtosis)
+
     # Map Sobol samples to Beta distribution using inverse CDF quantile function
     beta_samples = beta.ppf(sobol_samples, alpha_param, beta_param)
 
@@ -99,7 +90,7 @@ def simulate_exposure_factor_sobol(
 
 
 def simulate_annual_rate_of_occurrence_sobol(
-    sobol_samples: np.ndarray, aro_range: tuple[float, float], decimal_places: int = 2
+    sobol_samples: np.ndarray, aro_range: list[float], decimal_places: int = 2
 ) -> np.ndarray:
     """Simulate annual rate of occurrence using Sobol samples mapped to a Poisson distribution with specified decimal precision. As Poisson distribution accepts only integer values, the Sobol samples are scaled up to the desired precision, mapped to the Poisson distribution, and then scaled back to the original scale, bypassing the decimal limitation.
 
@@ -111,6 +102,10 @@ def simulate_annual_rate_of_occurrence_sobol(
     Returns:
         np.ndarray: Simulated annual rates of occurrence
     """
+    # To avoid poisson.ppf(0 or 1) = inf/NaN, clamp the samples:
+    eps = 1e-9
+    sobol_samples = np.clip(sobol_samples, eps, 1 - eps)
+
     # Scale factor for desired decimal precision
     scale_factor = 10**decimal_places
 
@@ -132,7 +127,7 @@ def simulate_annual_rate_of_occurrence_sobol(
 
 
 def calculate_compounding_costs(
-    control_costs: list[float], cost_adjustment_range: tuple[float, float], years: int
+    control_costs: list[float], cost_adjustment_range: list[float], years: int, num_samples: int = NUM_SAMPLES
 ) -> dict[str, dict[str, dict[str, np.float64]]]:
     """Given a list of control costs, a cost adjustment range, and a number of years, calculate the cost for each control for each year
 
@@ -140,16 +135,21 @@ def calculate_compounding_costs(
         control_costs: Base annualized cost of controls
         cost_adjustment_range: Cost adjustment per year range
         years: Number of years to simulate
+        num_samples: Number of samples to simulate. Default is NUM_SAMPLES
 
     Returns:
         dict[str, dict[str, dict[str, np.float64]]]: Dictionary of costs and adjustments for each control, for each year
     """
     # Initialize costs dictionary
     costs = {}
-    # Generate Sobol samples for cost adjustments
-    sobol_samples = generate_sobol_samples(
-        dimensions=len(control_costs) * years, samples=NUM_SAMPLES
+
+    # Define the problem for cost adjustments using setup_sensitivity_problem
+    problem = setup_sensitivity_problem(
+        **{f"cost_adj_{i}": cost_adjustment_range for i in range(len(control_costs) * years)}
     )
+
+    # Generate Sobol samples for cost adjustments
+    sobol_samples = sobol_sample.sample(problem, num_samples, calc_second_order=False, seed=RANDOM_SEED)
 
     # Year 0 is the base cost and has no adjustment
     costs["year_0"] = {
@@ -356,21 +356,136 @@ def convert_to_serializable(obj: any) -> any:
         return obj
 
 
+def setup_sensitivity_problem(**kwargs: dict[str, list[float]]) -> dict[str, list[float]]:
+    """Define the model inputs and their bounds for sensitivity analysis
+
+    Args:
+        **kwargs: Dictionary of parameter names and their bounds in a list with two floats
+
+    Returns:
+        dict[str, list[float]]: Problem dictionary for sensitivity analysis
+
+    Raises:
+        ValueError: If the parameter values are not lists of two floats
+    """
+    # Verify kwargs is a dictionary with the correct type
+    if not isinstance(kwargs, dict):
+        raise ValueError("Input parameters must be provided as a dictionary")
+
+    # Verify input parameters contain only two floats
+    for key, value in kwargs.items():
+        if not isinstance(key, str):
+            raise ValueError(f"Parameter name {key} must be a string")
+        if not isinstance(value, list) or len(value) != 2 or not all(isinstance(i, float) for i in value):
+            raise ValueError(f"Parameter {key} must be a list of two floats")
+
+    names = list(kwargs.keys())
+    bounds = list(kwargs.values())
+
+    problem = {
+        "num_vars": len(names),
+        "names": names,
+        "bounds": bounds,
+    }
+    return problem
+
+
+def evaluate_model(X: np.ndarray) -> np.array:
+    """Evaluate model for sensitivity analysis samples. The model calculates the ROSI for each sample. The input samples are expected to be in the format of (EF, ARO, cost_adj).
+    
+    Args:
+        X: Samples generated for sensitivity analysis
+
+    Returns:
+        np.array: ROSI values for each sample
+    """
+    Y = []
+    for params in X:
+        ef, aro, cost_adj = params
+
+        # Calculate base ALE
+        ale = calculate_ale(ASSET_VALUE, ef, aro)
+
+        # Calculate costs with adjustment
+        adjusted_costs = [cost * (1 + cost_adj) for cost in CONTROL_COSTS]
+
+        # Calculate ROSI for first control
+        ale_after = ale * (1 - CONTROL_REDUCTIONS[0])
+        rosi = calculate_rosi(ale, ale_after, adjusted_costs[0])
+        Y.append(rosi)
+
+    return np.array(Y)
+
+
+def perform_sensitivity_analysis(num_samples: int = NUM_SAMPLES, output_file: str = "sensitivity_analysis.png"):
+    """Perform Sobol sensitivity analysis on the model using the specified number of samples and save the results to a plot, if specified.
+
+    Args:
+        num_samples: Number of samples to generate for sensitivity analysis. Default is NUM_SAMPLES
+        output_file: Output file to save the sensitivity analysis plot. Default is "sensitivity_analysis.png"
+
+    Returns:
+        dict: Sensitivity analysis results
+    """
+    problem = setup_sensitivity_problem(EF_variance=EF_RANGE, ARO_variance=ARO_RANGE, cost_variance=COST_ADJUSTMENT_RANGE)
+
+    # Generate samples using sobol sampler
+    param_values = sobol_sample.sample(problem, num_samples, calc_second_order=False, seed=RANDOM_SEED)
+
+    # Run model evaluations
+    Y = evaluate_model(param_values)
+
+    # Create a copy of the problem dictionary to convert to numpy arrays
+    problem_array = problem.copy()
+    for key in problem_array.keys():
+        if key != "num_vars":
+            problem_array[key] = np.array(problem_array[key])
+
+    # Calculate sensitivity indices using sobol analyzer
+    Si = sobol_analyze.analyze(problem_array, Y, calc_second_order=False, seed=RANDOM_SEED)
+
+    # Visualize results
+    plt.figure(figsize=(10, 6))
+    plt.bar(problem["names"], Si["S1"], yerr=Si["S1_conf"], label="First Order", color="blue")
+    plt.bar(
+        problem["names"], Si["ST"], yerr=Si["ST_conf"], alpha=0.5, label="Total Order", color="orange"
+    )
+    plt.xlabel("Parameters")
+    plt.ylabel("Sensitivity Index")
+    plt.legend()
+    plt.title("Parameter Sensitivity Analysis")
+    plt.tight_layout()
+
+    # Save the plot if output file is provided
+    if output_file:
+        plt.savefig(output_file)
+
+    return Si
+
+
 # Set random seed for reproducibility
 np.random.seed(RANDOM_SEED)
 
-# Calculate the number of dimensions needed
-num_dimensions = 2 * NUM_YEARS
+# Define one EF_i and one ARO_i per year:
+params = {}
+for i in range(NUM_YEARS):
+    params[f"EF_{i+1}"] = EF_RANGE
+for i in range(NUM_YEARS):
+    params[f"ARO_{i+1}"] = ARO_RANGE
 
-# Generate Sobol samples for exposure factor and annual rate of occurrence
-sobol_samples = generate_sobol_samples(dimensions=num_dimensions, samples=NUM_SAMPLES)
+problem_ef_aro = setup_sensitivity_problem(**params)
 
-# Simulate EF and ARO using the appropriate slices of Sobol samples. All permutations use the same values for EF and ARO, thus all permutations are comparable
+# Now sobol_samples_ef_aro.shape will be (NUM_SAMPLES, 2*NUM_YEARS)
+sobol_samples_ef_aro = sobol_sample.sample(
+    problem_ef_aro, NUM_SAMPLES, calc_second_order=False, seed=RANDOM_SEED
+)
+
+# Slice the first NUM_YEARS columns for EF, and the next NUM_YEARS columns for ARO:
 ef_samples = simulate_exposure_factor_sobol(
-    sobol_samples[:, 0:NUM_YEARS], EF_RANGE, KURTOSIS
+    sobol_samples_ef_aro[:, :NUM_YEARS], EF_RANGE, KURTOSIS
 )
 aro_samples = simulate_annual_rate_of_occurrence_sobol(
-    sobol_samples[:, NUM_YEARS : 2 * NUM_YEARS], ARO_RANGE
+    sobol_samples_ef_aro[:, NUM_YEARS:], ARO_RANGE
 )
 
 # Calculate compounding costs for each control
@@ -383,7 +498,7 @@ all_permutations = list(permutations(range(1, NUM_YEARS + 1)))
 
 # List to store total ROSI values for each permutation after calculating all samples
 simulate_all_permutations = [
-    calculate_statistics_for_permutation_aggregate(  # You can use either calculate_statistics_for_permutation_aggregate or calculate_statistics_for_permutation_per_year
+    calculate_statistics_for_permutation_per_year(  # You can use either calculate_statistics_for_permutation_aggregate or calculate_statistics_for_permutation_per_year
         control_cost_values, ef_samples, aro_samples, permutation
     )
     for permutation in all_permutations
@@ -395,6 +510,9 @@ sorted_permutations = sorted(
 )
 best_permutation = sorted_permutations[0]["permutation"]
 best_rosi = sorted_permutations[0]["total_rosi"]
+
+# Run sensitivity analysis
+sensitivity_results = perform_sensitivity_analysis()
 
 # Initialize a results dictionary
 results = {
@@ -415,15 +533,14 @@ results = {
         "control_cost_values": control_cost_values,
     },
     "ranked_permutations": sorted_permutations,
-    "simulation_data": {
-        "ef_samples": ef_samples,
-        "aro_samples": aro_samples,
-    },
+    "sensitivity_results": sensitivity_results,
+    # "simulation_data": {
+    #     "ef_samples": ef_samples,
+    #     "aro_samples": aro_samples,
+    # },
 }
 
 serializable_results = convert_to_serializable(results)
 
 with open("test.json", "w") as f:
     json.dump(serializable_results, f, indent=4)
-
-# TODO: Add visualization of results
