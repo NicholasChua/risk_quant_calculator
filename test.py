@@ -126,6 +126,7 @@ def simulate_annual_rate_of_occurrence_sobol(
     return aro_samples
 
 
+# TODO: The compounding cost calculation and adjustment selection from sobol is broken. Fix this.
 def calculate_compounding_costs(
     control_costs: list[float], cost_adjustment_range: list[float], years: int, num_samples: int = NUM_SAMPLES
 ) -> dict[str, dict[str, dict[str, np.float64]]]:
