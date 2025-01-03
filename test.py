@@ -180,7 +180,14 @@ def calculate_compounding_costs(
     return costs
 
 
-def calculate_statistics_for_permutation(costs: dict[str, dict[str, dict[str, np.float64]]], ef_samples: np.ndarray, aro_samples: np.ndarray, permutation: tuple[int], control_reductions: list = CONTROL_REDUCTIONS, num_of_simulations: int = NUM_SAMPLES) -> dict[str, float]:
+def calculate_statistics_for_permutation_per_year(
+    costs: dict[str, dict[str, dict[str, np.float64]]],
+    ef_samples: np.ndarray,
+    aro_samples: np.ndarray,
+    permutation: tuple[int],
+    control_reductions: list = CONTROL_REDUCTIONS,
+    num_of_simulations: int = NUM_SAMPLES,
+) -> dict[str, float]:
     """Given a permutation of controls, calculate the ROSI for each year and the total ROSI for the permutation
 
     Args:
@@ -225,7 +232,9 @@ def calculate_statistics_for_permutation(costs: dict[str, dict[str, dict[str, np
 
             # Calculate the ALE before applying the control
             if year == 0:
-                ale_before = calculate_ale(ASSET_VALUE, ef_samples[i][year], aro_samples[i][year])
+                ale_before = calculate_ale(
+                    ASSET_VALUE, ef_samples[i][year], aro_samples[i][year]
+                )
             else:
                 ale_before = results[f"year_{year}"]["ale_after"]
 
@@ -253,7 +262,81 @@ def calculate_statistics_for_permutation(costs: dict[str, dict[str, dict[str, np
     return results
 
 
-# Convert NumPy arrays to lists for JSON serialization
+def calculate_statistics_for_permutation_aggregate(
+    costs: dict[str, dict[str, dict[str, np.float64]]],
+    ef_samples: np.ndarray,
+    aro_samples: np.ndarray,
+    permutation: tuple[int],
+    control_reductions: list = CONTROL_REDUCTIONS,
+    num_of_simulations: int = NUM_SAMPLES,
+) -> dict[str, float]:
+    """Given a permutation of controls, calculate the ROSI for the entire period
+
+    Args:
+        costs: Dictionary of costs and adjustments for each control, for each year
+        ef_samples: Simulated exposure factors
+        aro_samples: Simulated annual rates of occurrence
+        permutation: A single permutation of controls represented as tuple of integers
+        control_reductions: List of control reduction percentages
+        num_of_simulations: Number of samples to simulate
+
+    Returns:
+        dict[str, float]: Dictionary with permutation and total ROSI
+    """
+    rosi_per_simulation = []
+
+    for i in range(num_of_simulations):
+        results = {
+            "permutation": permutation,
+            "total_rosi": 0.0,
+        }
+
+        # Calculate initial ALE and yearly data
+        for year in range(len(permutation)):
+            control = permutation[year]
+            control_cost = costs[f"year_{year + 1}"][f"control_{control}"]["cost"]
+
+            # Calculate total cost up to this year
+            total_cost = sum(
+                costs[f"year_{y + 1}"][f"control_{permutation[y]}"]["cost"]
+                for y in range(year + 1)
+            )
+
+            # Calculate ALE before and after for this year
+            ale_before = calculate_ale(
+                ASSET_VALUE, ef_samples[i][year], aro_samples[i][year]
+            )
+            reduction = 1 - control_reductions[control - 1]
+            ale_after = calculate_ale(
+                ASSET_VALUE, ef_samples[i][year], aro_samples[i][year] * reduction
+            )
+
+            # Store year data
+            results[f"year_{year + 1}"] = {
+                "ale_before": ale_before,
+                "ale_after": ale_after,
+                "control_cost": control_cost,
+                "total_cost": total_cost,
+            }
+
+        # Calculate aggregate ROSI
+        total_ale_before = sum(
+            results[f"year_{y + 1}"]["ale_before"] for y in range(len(permutation))
+        )
+        total_ale_after = sum(
+            results[f"year_{y + 1}"]["ale_after"] for y in range(len(permutation))
+        )
+        total_costs = results[f"year_{len(permutation)}"]["total_cost"]
+
+        rosi = calculate_rosi(total_ale_before, total_ale_after, total_costs)
+        rosi_per_simulation.append(rosi)
+
+    # Set final ROSI value
+    results["total_rosi"] = float(np.mean(rosi_per_simulation))
+
+    return results
+
+
 def convert_to_serializable(obj: any) -> any:
     """Recursively converts numpy arrays, dictionaries, and lists into serializable formats.
 
@@ -300,7 +383,7 @@ all_permutations = list(permutations(range(1, NUM_YEARS + 1)))
 
 # List to store total ROSI values for each permutation after calculating all samples
 simulate_all_permutations = [
-    calculate_statistics_for_permutation(
+    calculate_statistics_for_permutation_aggregate(  # You can use either calculate_statistics_for_permutation_aggregate or calculate_statistics_for_permutation_per_year
         control_cost_values, ef_samples, aro_samples, permutation
     )
     for permutation in all_permutations
