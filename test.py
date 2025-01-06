@@ -126,11 +126,13 @@ def simulate_annual_rate_of_occurrence_sobol(
     return aro_samples
 
 
-# TODO: The compounding cost calculation and adjustment selection from sobol is broken. Fix this.
 def calculate_compounding_costs(
-    control_costs: list[float], cost_adjustment_range: list[float], years: int, num_samples: int = NUM_SAMPLES
+    control_costs: list[float],
+    cost_adjustment_range: list[float],
+    years: int,
+    num_samples: int = NUM_SAMPLES,
 ) -> dict[str, dict[str, dict[str, np.float64]]]:
-    """Given a list of control costs, a cost adjustment range, and a number of years, calculate the cost for each control for each year
+    """Given a list of control costs, a cost adjustment range, and a number of years, calculate the cost for each control for each year.
 
     Args:
         control_costs: Base annualized cost of controls
@@ -146,11 +148,16 @@ def calculate_compounding_costs(
 
     # Define the problem for cost adjustments using setup_sensitivity_problem
     problem = setup_sensitivity_problem(
-        **{f"cost_adj_{i}": cost_adjustment_range for i in range(len(control_costs) * years)}
+        **{
+            f"cost_adj_{i}": cost_adjustment_range
+            for i in range(len(control_costs) * years)
+        }
     )
 
-    # Generate Sobol samples for cost adjustments
-    sobol_samples = sobol_sample.sample(problem, num_samples, calc_second_order=False, seed=RANDOM_SEED)
+    # Generate Sobol samples for cost adjustments. Number of sobol samples is equal to samples * dimensions (years * controls)
+    sobol_samples = sobol_sample.sample(
+        problem, num_samples, calc_second_order=False, seed=RANDOM_SEED
+    )
 
     # Year 0 is the base cost and has no adjustment
     costs["year_0"] = {
@@ -161,21 +168,28 @@ def calculate_compounding_costs(
         for index, control_cost in enumerate(control_costs)
     }
 
+    # Dynamically compute how many samples we can average per control-year
+    num_dimensions = len(control_costs) * years
+    # Determine the number of samples to average for each control-year with a minimum of 1
+    n_avg = max(1, num_samples // num_dimensions)
+
     # Calculate costs for each year on a compounding basis for each control
     for year in range(1, years + 1):
         costs[f"year_{year}"] = {}
-        for index, control_cost in enumerate(control_costs):
-            # Use Sobol samples to adjust costs. (number of years) * (number of controls) samples are generated
-            sample_index = (year - 1) * len(control_costs) + index
-            # Calculate adjustment based on Sobol sample
+        for index, _ in enumerate(control_costs):
+            # Use mean of multiple Sobol samples for adjustment
+            sample_start = ((year - 1) * len(control_costs) + index) * n_avg
+            sample_end = sample_start + n_avg
+            adjustment_values = sobol_samples[sample_start:sample_end, sample_start // n_avg]
+            adjustment_mean = adjustment_values.mean()
             adjustment = np.float64(
-                sobol_samples[sample_index][0]
-                * (cost_adjustment_range[1] - cost_adjustment_range[0])
+                adjustment_mean * (cost_adjustment_range[1] - cost_adjustment_range[0]) 
                 + cost_adjustment_range[0]
             )
-            # Calculate new cost based on adjustment
+
+            previous_year_cost = costs[f"year_{year - 1}"][f"control_{index + 1}"]["cost"]
             costs[f"year_{year}"][f"control_{index + 1}"] = {
-                "cost": np.float64(control_cost + (control_cost * adjustment)),
+                "cost": np.float64(previous_year_cost + (previous_year_cost * adjustment)),
                 "adjustment": adjustment,
             }
     return costs
@@ -189,7 +203,7 @@ def calculate_statistics_for_permutation_per_year(
     control_reductions: list = CONTROL_REDUCTIONS,
     num_of_simulations: int = NUM_SAMPLES,
 ) -> dict[str, float]:
-    """Given a permutation of controls, calculate the ROSI for each year and the total ROSI for the permutation
+    """Given a permutation of controls, calculate the ROSI for each year and the total ROSI for the permutation.
 
     Args:
         costs: Dictionary of costs and adjustments for each control, for each year
@@ -271,7 +285,7 @@ def calculate_statistics_for_permutation_aggregate(
     control_reductions: list = CONTROL_REDUCTIONS,
     num_of_simulations: int = NUM_SAMPLES,
 ) -> dict[str, float]:
-    """Given a permutation of controls, calculate the ROSI for the entire period
+    """Given a permutation of controls, calculate the ROSI for the entire period.
 
     Args:
         costs: Dictionary of costs and adjustments for each control, for each year
@@ -357,8 +371,10 @@ def convert_to_serializable(obj: any) -> any:
         return obj
 
 
-def setup_sensitivity_problem(**kwargs: dict[str, list[float]]) -> dict[str, list[float]]:
-    """Define the model inputs and their bounds for sensitivity analysis
+def setup_sensitivity_problem(
+    **kwargs: dict[str, list[float]]
+) -> dict[str, list[float]]:
+    """Define the model inputs and their bounds for sensitivity analysis.
 
     Args:
         **kwargs: Dictionary of parameter names and their bounds in a list with two floats
@@ -377,7 +393,11 @@ def setup_sensitivity_problem(**kwargs: dict[str, list[float]]) -> dict[str, lis
     for key, value in kwargs.items():
         if not isinstance(key, str):
             raise ValueError(f"Parameter name {key} must be a string")
-        if not isinstance(value, list) or len(value) != 2 or not all(isinstance(i, float) for i in value):
+        if (
+            not isinstance(value, list)
+            or len(value) != 2
+            or not all(isinstance(i, float) for i in value)
+        ):
             raise ValueError(f"Parameter {key} must be a list of two floats")
 
     names = list(kwargs.keys())
@@ -391,34 +411,54 @@ def setup_sensitivity_problem(**kwargs: dict[str, list[float]]) -> dict[str, lis
     return problem
 
 
-def evaluate_model(X: np.ndarray) -> np.array:
-    """Evaluate model for sensitivity analysis samples. The model calculates the ROSI for each sample. The input samples are expected to be in the format of (EF, ARO, cost_adj).
-    
+def evaluate_model(X: np.ndarray, problem: dict) -> np.array:
+    """Evaluate model for sensitivity analysis samples. The model calculates the ROSI for each sample. Each row in X corresponds to one set of parameter values, in the same order as problem["names"].
+
+    For now, this function supports the following parameters:
+    - EF_variance: Exposure factor variance
+    - ARO_variance: Annual rate of occurrence variance
+    - cost_variance: Cost adjustment variance
+
     Args:
         X: Samples generated for sensitivity analysis
 
     Returns:
         np.array: ROSI values for each sample
     """
+    # Initialize output array
     Y = []
-    for params in X:
-        ef, aro, cost_adj = params
+
+    # Retrieve parameter names from the problem dictionary
+    param_names = problem["names"]
+
+    for row in X:
+        # Map each parameter name to its value
+        param_values = dict(zip(param_names, row))
+
+        # Retrieve parameters by name
+        ef = param_values.get("EF_variance", 0.5)
+        aro = param_values.get("ARO_variance", 2.0)
+        cost_adj = param_values.get("cost_variance", 0.0)
 
         # Calculate base ALE
         ale = calculate_ale(ASSET_VALUE, ef, aro)
 
-        # Calculate costs with adjustment
+        # Adjust costs
         adjusted_costs = [cost * (1 + cost_adj) for cost in CONTROL_COSTS]
 
-        # Calculate ROSI for first control
+        # Calculate ALE after applying first control
         ale_after = ale * (1 - CONTROL_REDUCTIONS[0])
+
+        # Calculate ROSI for demonstration
         rosi = calculate_rosi(ale, ale_after, adjusted_costs[0])
         Y.append(rosi)
 
     return np.array(Y)
 
 
-def perform_sensitivity_analysis(num_samples: int = NUM_SAMPLES, output_file: str = "sensitivity_analysis.png"):
+def perform_sensitivity_analysis(
+    num_samples: int = NUM_SAMPLES, output_file: str = "sensitivity_analysis.png"
+):
     """Perform Sobol sensitivity analysis on the model using the specified number of samples and save the results to a plot, if specified.
 
     Args:
@@ -428,13 +468,19 @@ def perform_sensitivity_analysis(num_samples: int = NUM_SAMPLES, output_file: st
     Returns:
         dict: Sensitivity analysis results
     """
-    problem = setup_sensitivity_problem(EF_variance=EF_RANGE, ARO_variance=ARO_RANGE, cost_variance=COST_ADJUSTMENT_RANGE)
+    problem = setup_sensitivity_problem(
+        EF_variance=EF_RANGE,
+        ARO_variance=ARO_RANGE,
+        cost_variance=COST_ADJUSTMENT_RANGE,
+    )
 
     # Generate samples using sobol sampler
-    param_values = sobol_sample.sample(problem, num_samples, calc_second_order=False, seed=RANDOM_SEED)
+    param_values = sobol_sample.sample(
+        problem, num_samples, calc_second_order=False, seed=RANDOM_SEED
+    )
 
     # Run model evaluations
-    Y = evaluate_model(param_values)
+    Y = evaluate_model(param_values, problem)
 
     # Create a copy of the problem dictionary to convert to numpy arrays
     problem_array = problem.copy()
@@ -443,13 +489,26 @@ def perform_sensitivity_analysis(num_samples: int = NUM_SAMPLES, output_file: st
             problem_array[key] = np.array(problem_array[key])
 
     # Calculate sensitivity indices using sobol analyzer
-    Si = sobol_analyze.analyze(problem_array, Y, calc_second_order=False, seed=RANDOM_SEED)
+    Si = sobol_analyze.analyze(
+        problem_array, Y, calc_second_order=False, seed=RANDOM_SEED
+    )
 
     # Visualize results
     plt.figure(figsize=(10, 6))
-    plt.bar(problem["names"], Si["S1"], yerr=Si["S1_conf"], label="First Order", color="blue")
     plt.bar(
-        problem["names"], Si["ST"], yerr=Si["ST_conf"], alpha=0.5, label="Total Order", color="orange"
+        problem["names"],
+        Si["S1"],
+        yerr=Si["S1_conf"],
+        label="First Order",
+        color="blue",
+    )
+    plt.bar(
+        problem["names"],
+        Si["ST"],
+        yerr=Si["ST_conf"],
+        alpha=0.5,
+        label="Total Order",
+        color="orange",
     )
     plt.xlabel("Parameters")
     plt.ylabel("Sensitivity Index")
@@ -535,10 +594,6 @@ results = {
     },
     "ranked_permutations": sorted_permutations,
     "sensitivity_results": sensitivity_results,
-    # "simulation_data": {
-    #     "ef_samples": ef_samples,
-    #     "aro_samples": aro_samples,
-    # },
 }
 
 serializable_results = convert_to_serializable(results)
