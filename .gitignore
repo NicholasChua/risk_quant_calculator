@@ -168,4 +168,5 @@ cython_debug/
 *.csv
 !input_example.json
 !input_example.csv
+!rqmc_sobol_example.csv
 !readme_media/*.png

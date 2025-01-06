@@ -1,334 +1,817 @@
 import numpy as np
-from scipy.stats import beta, poisson, qmc
+from scipy.stats import beta, poisson
 from itertools import permutations
 import matplotlib.pyplot as plt
 import json
+from SALib.sample import sobol as sobol_sample
+from SALib.analyze import sobol as sobol_analyze
+import csv
 
-# TODO: Fix cost calculations
-# Fix cost adjustments per year
+from risk_simulator import (
+    get_beta_parameters_for_kurtosis,
+)
 
-# Constants
 RANDOM_SEED = 42
-
-ASSET_VALUE = 500000
-EF_RANGE = (0.4, 0.6)  # Exposure factor range
-ARO_RANGE = (1.5, 2.5)  # Annual rate of occurrence range
-CONTROL_REDUCTIONS = [0.2, 0.35, 0.3, 0.45]  # Reduction percentages for controls
-CONTROL_COSTS = [10000, 30000, 20000, 35000]  # Base annualized cost of controls
-COST_ADJUSTMENT_RANGE = (0.0, 0.2)  # Cost adjustment per year range
-NUM_SAMPLES = 16384  # Number of Sobol samples
-NUM_YEARS = 4
+NUM_SAMPLES = 16384  # Number of Sobol samples 2^14
+KURTOSIS = 1.7  # Results in alpha and beta of 0.5
 
 
-# Helper functions
-def generate_sobol_samples(dimensions, num_samples):
-    """Generates Sobol samples for the given dimensions."""
-    sobol_engine = qmc.Sobol(d=dimensions, scramble=True)
-    samples = sobol_engine.random_base2(m=int(np.log2(num_samples)))
-    return samples
+def load_csv_data(
+    file_path: str,
+) -> dict[str, list[dict[str, int | float | list[float]]]]:
+    """Helper function to load data from a CSV file containing input parameters for the risk calculation.
 
-
-def scale_sobol_samples(samples, min_val, max_val):
-    """Scales Sobol samples to the desired range."""
-    return min_val + samples * (max_val - min_val)
-
-
-def simulate_ef(sobol_samples, kurtosis=2):
-    """Simulates EF using Sobol samples mapped to a Beta distribution."""
-    alpha, beta_param = kurtosis, kurtosis
-    beta_samples = beta.ppf(sobol_samples, a=alpha, b=beta_param)
-    return scale_sobol_samples(beta_samples, *EF_RANGE)
-
-
-def simulate_aro(sobol_samples):
-    """Simulates ARO using Sobol samples mapped to a Poisson distribution."""
-    poisson_samples = poisson.ppf(sobol_samples, mu=np.mean(ARO_RANGE))
-    return np.clip(poisson_samples, *ARO_RANGE)
-
-
-def calculate_ale(asset_value, ef, aro):
-    """Calculates the Annualized Loss Expectancy (ALE)."""
-    return asset_value * ef * aro
-
-
-def calculate_rosi(ale_before, ale_after, cost):
-    """Calculates the Return on Security Investment (ROSI)."""
-    return (ale_before - ale_after - cost) / cost
-
-
-def calculate_cumulative_cost(permutation, base_costs, cost_adjustments):
-    """
-    Calculates the cumulative cost for a given permutation of controls over the years.
+    The CSV file should have the following columns in order:
+        - id
+        - asset_value
+        - exposure_factor_min/max
+        - annual_rate_of_occurrence_min/max
+        - cost_adjustment_min/max
+        - control_reduction_i (alternating columns)
+        - control_cost_i (alternating columns)
 
     Args:
-        permutation (list): Order of controls (indices) to be implemented.
-        base_costs (list): Base annualized costs of each control.
-        cost_adjustments (np.ndarray): Cost adjustment factors (NUM_SAMPLES x NUM_YEARS).
+        file_path: The path to the CSV file.
 
     Returns:
-        cumulative_costs (list): Cumulative total cost for each year.
+        dict[str, list[dict[str, int | float | list[float]]]]: A dictionary with 'data' key containing list of risk dictionaries.
+
+    Raises:
+        FileNotFoundError: If CSV file not found
+        ValueError: If control columns missing or invalid
     """
-    cumulative_costs = []
-    total_cost = 0
+    result = {"data": []}
 
-    for year, control in enumerate(permutation):
-        # Initialize the cost for the current year
-        current_cost = base_costs[control]
+    try:
+        with open(file_path, "r", encoding="utf-8") as file:
+            reader = csv.DictReader(file)
 
-        # Adjust costs for previously implemented controls
-        for prev_year, prev_control in enumerate(permutation[:year]):
-            adjustment_factors = cost_adjustments[:, prev_year:year].mean(axis=1)
-            current_cost += base_costs[prev_control] * np.prod(1.0 + adjustment_factors)
+            if not reader.fieldnames:
+                raise ValueError("CSV file is empty or has no headers")
 
-        # Add the current control's base cost (no adjustment for itself in the year it's implemented)
-        total_cost += current_cost
-        cumulative_costs.append(total_cost)
+            headers = reader.fieldnames
 
-    return cumulative_costs
+            # Extract and validate control numbers
+            control_numbers = sorted(
+                [
+                    int(col.split("_")[-1])
+                    for col in headers
+                    if col.startswith("control_reduction_")
+                ]
+            )
+
+            if not control_numbers:
+                raise ValueError("No control columns found")
+
+            # Process each row
+            for row in reader:
+                control_reductions = []
+                control_costs = []
+
+                # Process controls
+                for num in control_numbers:
+                    red_key = f"control_reduction_{num}"
+                    cost_key = f"control_cost_{num}"
+
+                    if red_key not in row or cost_key not in row:
+                        raise ValueError(f"Missing control {num} data")
+
+                    control_reductions.append(float(row[red_key]))
+                    control_costs.append(float(row[cost_key]))
+
+                # Build risk dictionary
+                risk = {
+                    "id": int(row["id"]),
+                    "asset_value": float(row["asset_value"]),
+                    "ef_range": [
+                        float(row["exposure_factor_min"]),
+                        float(row["exposure_factor_max"]),
+                    ],
+                    "aro_range": [
+                        float(row["annual_rate_of_occurrence_min"]),
+                        float(row["annual_rate_of_occurrence_max"]),
+                    ],
+                    "cost_adjustment_range": [
+                        float(row["cost_adjustment_min"]),
+                        float(row["cost_adjustment_max"]),
+                    ],
+                    "control_reductions": control_reductions,
+                    "control_costs": control_costs,
+                    "num_years": len(control_costs),
+                }
+                result["data"].append(risk)
+
+    except FileNotFoundError:
+        raise FileNotFoundError(f"CSV file not found: {file_path}")
+    except csv.Error as e:
+        raise ValueError(f"CSV parsing error: {str(e)}")
+
+    return result
 
 
-# Generate Sobol samples
-sobol_samples = generate_sobol_samples(
-    dimensions=3 * NUM_YEARS, num_samples=NUM_SAMPLES
-)
-ef_samples = simulate_ef(sobol_samples[:, 0:NUM_YEARS])  # EF samples
-aro_samples = simulate_aro(sobol_samples[:, NUM_YEARS : 2 * NUM_YEARS])  # ARO samples
-cost_adjustments = scale_sobol_samples(
-    sobol_samples[:, 2 * NUM_YEARS :], *COST_ADJUSTMENT_RANGE
-)
+# TODO: Move this to a common library file
+def calculate_ale(
+    asset_value: float, exposure_factor: float, annual_rate_of_occurrence: float
+) -> float:
+    """Calculate the annualized loss expectancy (ALE) given the asset value, exposure factor, and annual rate of occurrence.
 
-# Initialize variables
-all_permutations = list(permutations(range(4)))  # All permutations of control indices
-best_permutation = None
-best_mean_rosi = -np.inf
-cumulative_cost_details = None
+    Args:
+        asset_value: Asset value
+        exposure_factor: Exposure factor
+        annual_rate_of_occurrence: Annual rate of occurrence
 
-# Evaluate each permutation
-for permutation in all_permutations:
-    ale_before = calculate_ale(ASSET_VALUE, ef_samples[:, 0], aro_samples[:, 0])
-    ale_previous = ale_before.copy()
-    rosi_per_year = []
+    Returns:
+        float: Annualized loss expectancy
+    """
+    return asset_value * exposure_factor * annual_rate_of_occurrence
 
-    for year, control in enumerate(permutation):
-        # Apply the control
-        reduction = CONTROL_REDUCTIONS[control]
-        ale_after = ale_previous * (1 - reduction)
 
-        # Adjust cost if not year 1
-        cost = CONTROL_COSTS[control]
-        if year > 0:
-            cost *= 1 + cost_adjustments[:, year - 1].mean()
+def calculate_rosi(
+    ale_before: float, ale_after: float, control_costs: list[float] | float
+) -> float:
+    """Calculate the return on security investment (ROSI) given the ALE before and after implementing controls and the control costs.
 
-        # Calculate ROSI for the year
-        rosi = calculate_rosi(ale_previous, ale_after, cost)
-        rosi_per_year.append(rosi)
+    Args:
+        ale_before: Annualized loss expectancy before implementing controls
+        ale_after: Annualized loss expectancy after implementing controls
+        control_costs: Annualized cost of controls (either a single float or a list of floats)
 
-        # Update ALE for next year
-        ale_previous = ale_after
+    Returns:
+        float: Return on security investment
+    """
+    if isinstance(control_costs, float):
+        total_control_costs = control_costs
+    else:
+        total_control_costs = sum(control_costs)
 
-    # Aggregate ROSI for this permutation
-    mean_rosi = np.mean(np.hstack(rosi_per_year), axis=0)
+    return (ale_before - ale_after - total_control_costs) / total_control_costs * 100
 
-    # Calculate cumulative cost
-    cumulative_costs = calculate_cumulative_cost(
-        permutation, CONTROL_COSTS, cost_adjustments
+
+def simulate_exposure_factor_sobol(
+    sobol_samples: np.ndarray, ef_range: list[float], kurtosis: int
+) -> np.ndarray:
+    """Simulate exposure factor using Sobol samples mapped to a Beta distribution with a specified kurtosis.
+
+    Args:
+        sobol_samples: Sobol samples
+        ef_range: Exposure factor range
+        kurtosis: Kurtosis of the distribution
+
+    Returns:
+        np.ndarray: Simulated exposure factors
+    """
+    # To avoid beta.ppf(0 or 1) = inf/NaN, clamp the samples:
+    eps = 1e-9
+    sobol_samples = np.clip(sobol_samples, eps, 1 - eps)
+
+    # Calculate Beta parameters based on kurtosis
+    alpha_param, beta_param = get_beta_parameters_for_kurtosis(kurtosis)
+
+    # Map Sobol samples to Beta distribution using inverse CDF quantile function
+    beta_samples = beta.ppf(sobol_samples, alpha_param, beta_param)
+
+    # Scale Beta samples to the desired range
+    exposure_factors = ef_range[0] + beta_samples * (ef_range[1] - ef_range[0])
+
+    return exposure_factors
+
+
+def simulate_annual_rate_of_occurrence_sobol(
+    sobol_samples: np.ndarray, aro_range: list[float], decimal_places: int = 2
+) -> np.ndarray:
+    """Simulate annual rate of occurrence using Sobol samples mapped to a Poisson distribution with specified decimal precision. As Poisson distribution accepts only integer values, the Sobol samples are scaled up to the desired precision, mapped to the Poisson distribution, and then scaled back to the original scale, bypassing the decimal limitation.
+
+    Args:
+        sobol_samples: Sobol samples
+        aro_range: Annual rate of occurrence range
+        decimal_places: Number of decimal places for the generated values (default is 2)
+
+    Returns:
+        np.ndarray: Simulated annual rates of occurrence
+    """
+    # To avoid poisson.ppf(0 or 1) = inf/NaN, clamp the samples:
+    eps = 1e-9
+    sobol_samples = np.clip(sobol_samples, eps, 1 - eps)
+
+    # Scale factor for desired decimal precision
+    scale_factor = 10**decimal_places
+
+    # Scale Sobol samples to integers
+    scaled_sobol_samples = sobol_samples * scale_factor
+
+    # Map Sobol samples to Poisson distribution using inverse CDF quantile function
+    poisson_samples = poisson.ppf(
+        scaled_sobol_samples / scale_factor, mu=np.mean(aro_range) * scale_factor
     )
 
-    # Update best permutation if this one is better
-    if mean_rosi > best_mean_rosi:
-        best_mean_rosi = mean_rosi
-        best_permutation = permutation
-        cumulative_cost_details = cumulative_costs
+    # Convert back to the original scale
+    aro_samples = poisson_samples / scale_factor
 
-# Print results
-print(f"Best Permutation: {best_permutation}")
-print(f"Highest Mean ROSI: {best_mean_rosi:.2f}")
-print(f"Cumulative Costs by Year: {cumulative_cost_details}")
+    # Clip the values to the desired range
+    aro_samples = np.clip(aro_samples, aro_range[0], aro_range[1])
+
+    return aro_samples
 
 
-# Set random seed for reproducibility
-np.random.seed(RANDOM_SEED)
+def randomize_sobol_samples(sobol_samples: np.ndarray) -> np.ndarray:
+    """Randomize Sobol samples using a uniform random shift.
+    
+    Args:
+        sobol_samples: Original Sobol samples
+    
+    Returns:
+        np.ndarray: Randomized Sobol samples
+    """
+    random_shift = np.random.uniform(size=sobol_samples.shape)
+    randomized_samples = (sobol_samples + random_shift) % 1
+    return randomized_samples
 
-# Generate Sobol samples
-sobol_samples = generate_sobol_samples(
-    dimensions=3 * NUM_YEARS, num_samples=NUM_SAMPLES
-)
-ef_samples = simulate_ef(sobol_samples[:, 0:NUM_YEARS])  # EF samples
-aro_samples = simulate_aro(sobol_samples[:, NUM_YEARS : 2 * NUM_YEARS])  # ARO samples
-cost_adjustments = scale_sobol_samples(
-    sobol_samples[:, 2 * NUM_YEARS :], *COST_ADJUSTMENT_RANGE
-)
 
-# Initialize variables
-all_permutations = list(permutations(range(4)))  # All permutations of control indices
-best_permutation = None
-best_mean_rosi = -np.inf
+def calculate_compounding_costs(
+    control_costs: list[float],
+    cost_adjustment_range: list[float],
+    years: int,
+    num_samples: int = NUM_SAMPLES,
+) -> dict[str, dict[str, dict[str, np.float64]]]:
+    """Given a list of control costs, a cost adjustment range, and a number of years, calculate the cost for each control for each year.
 
-# Evaluate each permutation
-for permutation in all_permutations:
-    ale_before = calculate_ale(ASSET_VALUE, ef_samples[:, 0], aro_samples[:, 0])
-    ale_previous = ale_before.copy()
-    rosi_per_year = []
+    Args:
+        control_costs: Base annualized cost of controls
+        cost_adjustment_range: Cost adjustment per year range
+        years: Number of years to simulate
+        num_samples: Number of samples to simulate. Default is NUM_SAMPLES
 
-    for year, control in enumerate(permutation):
-        # Apply the control
-        reduction = CONTROL_REDUCTIONS[control]
-        ale_after = ale_previous * (1 - reduction)
+    Returns:
+        dict[str, dict[str, dict[str, np.float64]]]: Dictionary of costs and adjustments for each control, for each year
+    """
+    # Initialize costs dictionary
+    costs = {}
 
-        # Adjust cost if not year 1
-        cost = CONTROL_COSTS[control]
-        if year > 0:
-            cost *= 1 + cost_adjustments[:, year - 1]
+    # Define the problem for cost adjustments using setup_sensitivity_problem
+    problem = setup_sensitivity_problem(
+        **{
+            f"cost_adj_{i}": cost_adjustment_range
+            for i in range(len(control_costs) * years)
+        }
+    )
 
-        # Calculate ROSI for the year
-        rosi = calculate_rosi(ale_previous, ale_after, cost)
-        rosi_per_year.append(rosi)
+    # Generate Sobol samples for cost adjustments. Number of sobol samples is equal to samples * dimensions (years * controls)
+    sobol_samples = sobol_sample.sample(
+        problem, num_samples, calc_second_order=False, seed=RANDOM_SEED
+    )
 
-        # Update ALE for next year
-        ale_previous = ale_after
+    # Randomize Sobol samples to avoid correlation with EF and ARO
+    sobol_samples = randomize_sobol_samples(sobol_samples)
 
-    # Aggregate ROSI for this permutation
-    mean_rosi = np.mean(np.hstack(rosi_per_year), axis=0)
-
-    # Update best permutation if this one is better
-    if mean_rosi > best_mean_rosi:
-        best_mean_rosi = mean_rosi
-        best_permutation = permutation
-
-# Calculate complete ALE progression first
-ale_before = calculate_ale(ASSET_VALUE, ef_samples[:, 0], aro_samples[:, 0])
-ale_previous = ale_before.copy()
-ale_values = [np.mean(ale_before)]
-
-for control in best_permutation:
-    reduction = CONTROL_REDUCTIONS[control]
-    ale_after = ale_previous * (1 - reduction)
-    ale_values.append(np.mean(ale_after))
-    ale_previous = ale_after
-
-# Collect data for JSON export
-export_data = {
-    "best_permutation": best_permutation,
-    "best_mean_rosi": best_mean_rosi,
-    "ale_values": ale_values,
-    "controls": [],
-}
-
-for idx, (control, reduction, cost) in enumerate(
-    zip(best_permutation, CONTROL_REDUCTIONS, CONTROL_COSTS)
-):
-    control_data = {
-        "control": control,
-        "reduction": reduction,
-        "base_cost": cost,
-        "cumulative_total_cost": np.sum(
-            cost * (1 + cost_adjustments[:, :idx].sum(axis=1))
-        ),
-        "ef": ef_samples[:, 0][control],
-        "aro": aro_samples[:, 0][control],
-        "cost_adjustment": cost_adjustments[:, idx].mean(),
-        "ale_before": ale_values[idx],
-        "ale_after": ale_values[idx + 1],
-        "rosi": np.mean(rosi_per_year[idx]),
+    # Year 0 is the base cost and has no adjustment
+    costs["year_0"] = {
+        f"control_{index + 1}": {
+            "cost": np.float64(control_cost),
+            "adjustment": np.float64(0.0),
+        }
+        for index, control_cost in enumerate(control_costs)
     }
-    export_data["controls"].append(control_data)
 
-# Add summary data
-export_data["summary"] = {
-    "input_asset_value": ASSET_VALUE,
-    "input_ef_range": EF_RANGE,
-    "input_aro_range": ARO_RANGE,
-    "input_control_reductions": CONTROL_REDUCTIONS,
-    "input_control_costs": CONTROL_COSTS,
-    "input_cost_adjustment_range": COST_ADJUSTMENT_RANGE,
-    "total_samples": NUM_SAMPLES,
-    "initial_ale": ale_values[0],
-    "final_ale": ale_values[-1],
-    "total_reduction": 1 - ale_values[-1] / ale_values[0],
-}
+    # Dynamically compute how many samples we can average per control-year
+    num_dimensions = len(control_costs) * years
+    # Determine the number of samples to average for each control-year with a minimum of 1
+    n_avg = max(1, num_samples // num_dimensions)
 
-# Export to JSON file
-with open("rqmc_sobol_test_results.json", "w") as json_file:
-    json.dump(export_data, json_file, indent=4)
+    # Calculate costs for each year on a compounding basis for each control
+    for year in range(1, years + 1):
+        costs[f"year_{year}"] = {}
+        for index, _ in enumerate(control_costs):
+            # Use mean of multiple Sobol samples for adjustment
+            sample_start = ((year - 1) * len(control_costs) + index) * n_avg
+            sample_end = sample_start + n_avg
+            adjustment_values = sobol_samples[
+                sample_start:sample_end, sample_start // n_avg
+            ]
+            adjustment_mean = adjustment_values.mean()
+            adjustment = np.float64(
+                adjustment_mean * (cost_adjustment_range[1] - cost_adjustment_range[0])
+                + cost_adjustment_range[0]
+            )
 
-# Setup figure and grid
-plt.figure(figsize=(20, 10))
-gs = plt.GridSpec(2, 4)
+            previous_year_cost = costs[f"year_{year - 1}"][f"control_{index + 1}"][
+                "cost"
+            ]
+            costs[f"year_{year}"][f"control_{index + 1}"] = {
+                "cost": np.float64(
+                    previous_year_cost + (previous_year_cost * adjustment)
+                ),
+                "adjustment": adjustment,
+            }
+    return costs
 
-# ALE progression plot (left half of top row)
-ax1 = plt.subplot(gs[0, 0:2])
-ax1.plot(range(NUM_YEARS + 1), ale_values, marker="o")
-ax1.set_title(f"ALE Progression for Best Permutation: {best_permutation}")
-ax1.set_xlabel("Year")
-ax1.set_ylabel("Mean ALE ($)")
-ax1.grid(True)
-ax1.set_xticks(range(NUM_YEARS + 1))
 
-# Create 4 control tables (2 in top right, 2 in bottom left)
-table_positions = [(0, 2), (0, 3), (1, 0), (1, 1)]
-for idx, (control, reduction, cost, pos) in enumerate(
-    zip(best_permutation, CONTROL_REDUCTIONS, CONTROL_COSTS, table_positions)
+def calculate_statistics_for_permutation_per_year(
+    asset_value: float,
+    costs: dict[str, dict[str, dict[str, np.float64]]],
+    ef_samples: np.ndarray,
+    aro_samples: np.ndarray,
+    permutation: tuple[int],
+    control_reductions: list,
+    num_of_simulations: int = NUM_SAMPLES,
+) -> dict[str, float]:
+    """Given a permutation of controls, calculate the ROSI for each year and the total ROSI for the permutation.
+
+    Args:
+        asset_value: The value of the asset at risk, expressed in monetary units
+        costs: Dictionary of costs and adjustments for each control, for each year
+        ef_samples: Simulated exposure factors
+        aro_samples: Simulated annual rates of occurrence
+        permutation: A single permutation of controls represented as a tuple of integers
+        control_reductions: List of control reduction percentages
+        num_of_simulations: Number of samples to simulate
+
+    Returns:
+        dict[str, float]: Dictionary of results for the permutation
+    """
+    # Initialize ROSI
+    rosi_per_simulation = []
+
+    for i in range(num_of_simulations):
+        rosi_per_year = []
+        results = {
+            "permutation": permutation,
+            "total_rosi": 0.0,
+        }
+
+        for year in range(len(permutation)):
+            # Retrieve the appropriate control and its cost for the year
+            control = permutation[year]
+            control_cost = costs[f"year_{year + 1}"][f"control_{control}"]["cost"]
+
+            # Calculate the total cost by summing the costs of all controls up to the current year, inclusive
+            total_cost = sum(
+                [
+                    costs[f"year_{year + 1}"][f"control_{control}"]["cost"]
+                    for control in permutation[: year + 1]
+                ]
+            )
+
+            # Calculate the new ARO after applying the control
+            aro_after = aro_samples[i][year] * (1 - control_reductions[control - 1])
+
+            # Calculate the new ALE after applying the control
+            ale_after = calculate_ale(asset_value, ef_samples[i][year], aro_after)
+
+            # Calculate the ALE before applying the control
+            if year == 0:
+                ale_before = calculate_ale(
+                    asset_value, ef_samples[i][year], aro_samples[i][year]
+                )
+            else:
+                ale_before = results[f"year_{year}"]["ale_after"]
+
+            # Calculate the ROSI after applying the control and save it
+            rosi = calculate_rosi(ale_before, ale_after, total_cost)
+            rosi_per_year.append(rosi)
+
+            # Add year-by-year information to the results
+            results[f"year_{year + 1}"] = {
+                "ale_before": ale_before,
+                "ale_after": ale_after,
+                "control_cost": control_cost,
+                "total_cost": total_cost,
+                "rosi": rosi,
+            }
+
+        # Calculate the total ROSI for the permutation
+        results["total_rosi"] = np.sum(rosi_per_year)
+        rosi_per_simulation.append(results["total_rosi"])
+
+    # Average the ROSI over all simulations
+    average_rosi = np.mean(rosi_per_simulation)
+    results["total_rosi"] = average_rosi
+
+    return results
+
+
+def calculate_statistics_for_permutation_aggregate(
+    asset_value: float,
+    costs: dict[str, dict[str, dict[str, np.float64]]],
+    ef_samples: np.ndarray,
+    aro_samples: np.ndarray,
+    permutation: tuple[int],
+    control_reductions: list,
+    num_of_simulations: int = NUM_SAMPLES,
+) -> dict[str, float]:
+    """Given a permutation of controls, calculate the ROSI for the entire period.
+
+    Args:
+        asset_value: The value of the asset at risk, expressed in monetary units
+        costs: Dictionary of costs and adjustments for each control, for each year
+        ef_samples: Simulated exposure factors
+        aro_samples: Simulated annual rates of occurrence
+        permutation: A single permutation of controls represented as tuple of integers
+        control_reductions: List of control reduction percentages
+        num_of_simulations: Number of samples to simulate. Default is NUM_SAMPLES
+
+    Returns:
+        dict[str, float]: Dictionary with permutation and total ROSI
+    """
+    rosi_per_simulation = []
+
+    for i in range(num_of_simulations):
+        results = {
+            "permutation": permutation,
+            "total_rosi": 0.0,
+        }
+
+        # Calculate initial ALE and yearly data
+        for year in range(len(permutation)):
+            control = permutation[year]
+            control_cost = costs[f"year_{year + 1}"][f"control_{control}"]["cost"]
+
+            # Calculate total cost up to this year
+            total_cost = sum(
+                costs[f"year_{y + 1}"][f"control_{permutation[y]}"]["cost"]
+                for y in range(year + 1)
+            )
+
+            # Calculate ALE before and after for this year
+            ale_before = calculate_ale(
+                asset_value, ef_samples[i][year], aro_samples[i][year]
+            )
+            reduction = 1 - control_reductions[control - 1]
+            ale_after = calculate_ale(
+                asset_value, ef_samples[i][year], aro_samples[i][year] * reduction
+            )
+
+            # Store year data
+            results[f"year_{year + 1}"] = {
+                "ale_before": ale_before,
+                "ale_after": ale_after,
+                "control_cost": control_cost,
+                "total_cost": total_cost,
+            }
+
+        # Calculate aggregate ROSI
+        total_ale_before = sum(
+            results[f"year_{y + 1}"]["ale_before"] for y in range(len(permutation))
+        )
+        total_ale_after = sum(
+            results[f"year_{y + 1}"]["ale_after"] for y in range(len(permutation))
+        )
+        total_costs = results[f"year_{len(permutation)}"]["total_cost"]
+
+        rosi = calculate_rosi(total_ale_before, total_ale_after, total_costs)
+        rosi_per_simulation.append(rosi)
+
+    # Set final ROSI value
+    results["total_rosi"] = float(np.mean(rosi_per_simulation))
+
+    return results
+
+
+def convert_to_serializable(obj: any) -> any:
+    """Recursively converts numpy arrays, dictionaries, and lists into serializable formats.
+
+    Args:
+        obj: The object to be converted. It can be a numpy array, dictionary, list, or any other type.
+
+    Returns:
+        any: The converted object in a serializable format. Numpy arrays are converted to lists, dictionaries are recursively processed, and lists are recursively processed. Other types are returned as is.
+    """
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: convert_to_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_serializable(i) for i in obj]
+    else:
+        return obj
+
+
+def setup_sensitivity_problem(
+    **kwargs: dict[str, list[float]]
+) -> dict[str, list[float]]:
+    """Define the model inputs and their bounds for sensitivity analysis.
+
+    Args:
+        **kwargs: Dictionary of parameter names and their bounds in a list with two floats
+
+    Returns:
+        dict[str, list[float]]: Problem dictionary for sensitivity analysis
+
+    Raises:
+        ValueError: If the parameter values are not lists of two floats
+    """
+    # Verify kwargs is a dictionary with the correct type
+    if not isinstance(kwargs, dict):
+        raise ValueError("Input parameters must be provided as a dictionary")
+
+    # Verify input parameters contain only two floats
+    for key, value in kwargs.items():
+        if not isinstance(key, str):
+            raise ValueError(f"Parameter name {key} must be a string")
+        if (
+            not isinstance(value, list)
+            or len(value) != 2
+            or not all(isinstance(i, float) for i in value)
+        ):
+            raise ValueError(f"Parameter {key} must be a list of two floats")
+
+    names = list(kwargs.keys())
+    bounds = list(kwargs.values())
+
+    problem = {
+        "num_vars": len(names),
+        "names": names,
+        "bounds": bounds,
+    }
+    return problem
+
+
+def evaluate_model(
+    asset_value: float,
+    control_costs: list[float],
+    control_reductions: list[float],
+    X: np.ndarray,
+    problem: dict
+) -> np.array:
+    """Evaluate model for sensitivity analysis samples. The model calculates the ROSI for each sample. Each row in X corresponds to one set of parameter values, in the same order as problem["names"].
+
+    For now, this function supports the following parameters:
+    - EF_variance: Exposure factor variance
+    - ARO_variance: Annual rate of occurrence variance
+    - cost_variance: Cost adjustment variance
+
+    Args:
+        asset_value: The value of the asset at risk, expressed in monetary units
+        control_costs: List of control costs, expressed in monetary units
+        control_reductions: List of control reduction percentages, expressed as decimals
+        X: Samples generated for sensitivity analysis
+
+    Returns:
+        np.array: ROSI values for each sample
+    """
+    # Initialize output array
+    Y = []
+
+    # Retrieve parameter names from the problem dictionary
+    param_names = problem["names"]
+
+    for row in X:
+        # Map each parameter name to its value
+        param_values = dict(zip(param_names, row))
+
+        # Retrieve parameters by name
+        ef = param_values.get("EF_variance", 0.5)
+        aro = param_values.get("ARO_variance", 2.0)
+        cost_adj = param_values.get("cost_variance", 0.0)
+
+        # Calculate base ALE
+        ale = calculate_ale(asset_value, ef, aro)
+
+        # Adjust costs
+        adjusted_costs = [cost * (1 + cost_adj) for cost in control_costs]
+
+        # Calculate ALE after applying first control
+        ale_after = ale * (1 - control_reductions[0])
+
+        # Calculate ROSI for demonstration
+        rosi = calculate_rosi(ale, ale_after, adjusted_costs[0])
+        Y.append(rosi)
+
+    return np.array(Y)
+
+
+def perform_sensitivity_analysis(
+    asset_value: float,
+    ef_range: list[float],
+    aro_range: list[float],
+    cost_adjustment_range: list[float],
+    control_costs: list[float],
+    control_reductions: list[float],
+    output_file: str,
+    num_samples: int = NUM_SAMPLES,
 ):
-    ax = plt.subplot(gs[pos])
-    ax.axis("off")
+    """Perform Sobol sensitivity analysis on the model using the specified number of samples and save the results to a plot, if specified.
 
-    control_stats = [
-        f"Control {control}",
-        f"-------------",
-        f"Reduction: {reduction:.0%}",
-        f"Base Cost: ${cost:,.0f}",
-        f"Cumulative Total Cost: ${np.sum(cost * (1 + cost_adjustments[:, :idx].sum(axis=1))):,.0f}",
-        f"EF: {ef_samples[:, 0][control]:.2f}",
-        f"ARO: {aro_samples[:, 0][control]:.2f}",
-        f"Cost Adjustment: {cost_adjustments[:, idx].mean():.2f}",
-        f"ALE Before: ${ale_values[idx]:,.0f}",
-        f"ALE After: ${ale_values[idx+1]:,.0f}",
-        f"ROSI: {np.mean(rosi_per_year[idx]):.1f}%",
+    Args:
+        asset_value: The value of the asset at risk, expressed in monetary units
+        ef_range: Exposure factor range
+        aro_range: Annual rate of occurrence range
+        cost_adjustment_range: Cost adjustment per year range
+        control_costs: List of control costs, expressed in monetary units
+        control_reductions: List of control reduction percentages, expressed as decimals
+        output_file: Output file to save the sensitivity analysis plot
+        num_samples: Number of samples to generate for sensitivity analysis. Default is NUM_SAMPLES
+
+    Returns:
+        dict: Sensitivity analysis results
+    """
+    problem = setup_sensitivity_problem(
+        EF_variance=ef_range,
+        ARO_variance=aro_range,
+        cost_variance=cost_adjustment_range,
+    )
+
+    # Generate samples using sobol sampler
+    param_values = sobol_sample.sample(
+        problem, num_samples, calc_second_order=False, seed=RANDOM_SEED
+    )
+
+    # Run model evaluations
+    Y = evaluate_model(asset_value, control_costs, control_reductions, param_values, problem)
+
+    # Create a copy of the problem dictionary to convert to numpy arrays
+    problem_array = problem.copy()
+    for key in problem_array.keys():
+        if key != "num_vars":
+            problem_array[key] = np.array(problem_array[key])
+
+    # Calculate sensitivity indices using sobol analyzer
+    Si = sobol_analyze.analyze(
+        problem_array, Y, calc_second_order=False, seed=RANDOM_SEED
+    )
+
+    # Visualize results
+    plt.figure(figsize=(10, 6))
+    plt.bar(
+        problem["names"],
+        Si["S1"],
+        yerr=Si["S1_conf"],
+        label="First Order",
+        color="blue",
+    )
+    plt.bar(
+        problem["names"],
+        Si["ST"],
+        yerr=Si["ST_conf"],
+        alpha=0.5,
+        label="Total Order",
+        color="orange",
+    )
+    plt.xlabel("Parameters")
+    plt.ylabel("Sensitivity Index")
+    plt.legend()
+    plt.title("Parameter Sensitivity Analysis")
+    plt.tight_layout()
+
+    # Save the plot if output file is provided
+    if output_file:
+        plt.savefig(output_file)
+
+    return Si
+
+
+def simulate_control_sequence_optimization(
+    asset_value: float,
+    ef_range: list[float],
+    aro_range: list[float],
+    control_costs: list[float],
+    cost_adjustment_range: list[float],
+    control_reductions: list[float],
+    num_years: int,
+    kurtosis: float = KURTOSIS,
+    num_samples: int = NUM_SAMPLES,
+    output_json_file: str = None,
+    output_png_file: str = None,
+) -> None:
+    """Given a set of security controls to be implemented, with one control per year, determine the optimal control implementation sequence to maximize the Return on Security Investment (ROSI) over a specified number of years, using Randomized Quasi-Monte Carlo (RQMC) and Sobol sensitivity analysis.
+
+    The simulation uses:
+        - Sobol samples for the exposure factor, annual rate of occurrence, and cost adjustments
+        - RQMC for adding randomness to the Sobol samples and averaging multiple samples per control-year
+        - Beta distribution for introducing kurtosis to the exposure factor
+        - Poisson distribution for simulating the annual rate of occurrence, with a specified number of decimal places to bypass the integer limitation of the distribution
+        - Sobol sensitivity analysis as a global sensitivity analysis method to determine the impact of varying the exposure factor, annual rate of occurrence, and control costs on the ROSI
+            - First order sensitivity index (S1) measures the impact of each parameter on the output
+            - Total order sensitivity index (ST) measures the impact of each parameter, including interactions with other parameters
+
+    The implementation performs a multivariate time series simulation to evaluate the ROSI for each year, for each permutation of controls. The simulation takes into account variability in the exposure factor, annual rate of occurrence, and control costs. The total ROSI is derived from a summation of the ROSI for all years. The simulation also performs a sensitivity analysis to determine the impact of varying the exposure factor, annual rate of occurrence, and control costs on the ROSI.
+
+    An example scenario is as follows:
+        - You have an asset value of X
+        - You have 4 security controls to implement (referred to as 1, 2, 3, 4), with a base annualized cost of A, B, C, D
+        - You predict the exposure factor to be between X_ef and Y_ef
+        - You predict the annual rate of occurrence to be between X_aro and Y_aro
+        - You predict the cost adjustment for each control to be between X_adj and Y_adj per year
+        - You know the reduction in risk for each control to be applied to the annual rate of occurrence
+        - You want to know the optimal sequence of controls to implement to maximize the ROSI over those years
+        - You want to know the impact of varying the exposure factor, annual rate of occurrence, and control costs on the ROSI
+
+    Args:
+        asset_value: The value of the asset at risk, expressed in monetary units.
+        ef_range: The range of the exposure factor, representing the percentage of the asset value that is at risk during a risk event, expressed as decimals.
+        aro_range: The range of the annual rate of occurrence, representing the frequency of the risk event over a year, expressed as decimals.
+        control_costs: The base annualized cost of implementing each security control, expressed in monetary units.
+        cost_adjustment_range: The range of the cost adjustment for each control per year, expressed as decimals.
+        control_reductions: The percentage reduction in risk for each control, expressed as decimals.
+        num_years: The number of years to simulate.
+        kurtosis: The kurtosis of the distribution for the exposure factor. Default is constant KURTOSIS
+        num_samples: The number of samples to generate for the simulation. Default is constant NUM_SAMPLES
+        json_output_file: The output JSON file to save the simulation results. Default is None
+        png_output_file: The output PNG file to save the simulation results. Default is None
+
+    Returns:
+        None
+    """
+    # Set random seed for reproducibility
+    np.random.seed(RANDOM_SEED)
+
+    # Define one EF_i and one ARO_i per year:
+    params = {}
+    for i in range(num_years):
+        params[f"EF_{i+1}"] = ef_range
+    for i in range(num_years):
+        params[f"ARO_{i+1}"] = aro_range
+
+    problem_ef_aro = setup_sensitivity_problem(**params)
+
+    # Generate Sobol samples for EF and ARO
+    sobol_samples_ef_aro = sobol_sample.sample(
+        problem_ef_aro, num_samples, calc_second_order=False, seed=RANDOM_SEED
+    )
+
+    # Randomize Sobol samples to avoid correlation with cost adjustments
+    sobol_samples_ef_aro = randomize_sobol_samples(sobol_samples_ef_aro)
+
+    # Slice the first NUM_YEARS columns for EF, and the next NUM_YEARS columns for ARO:
+    ef_samples = simulate_exposure_factor_sobol(
+        sobol_samples_ef_aro[:, :num_years], ef_range, kurtosis
+    )
+    aro_samples = simulate_annual_rate_of_occurrence_sobol(
+        sobol_samples_ef_aro[:, num_years:], aro_range
+    )
+
+    # Calculate compounding costs for each control
+    control_cost_values = calculate_compounding_costs(
+        control_costs, cost_adjustment_range, num_years
+    )
+
+    # Determine permutations of control orderings (starting from 1 instead of 0)
+    all_permutations = list(permutations(range(1, num_years + 1)))
+
+    # List to store total ROSI values for each permutation after calculating all samples
+    simulate_all_permutations = [
+        calculate_statistics_for_permutation_per_year(  # You can use either calculate_statistics_for_permutation_aggregate or calculate_statistics_for_permutation_per_year
+            asset_value, control_cost_values, ef_samples, aro_samples, permutation, control_reductions, num_samples
+        )
+        for permutation in all_permutations
     ]
 
-    ax.text(
-        0.1,
-        0.5,
-        "\n".join(control_stats),
-        bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray"),
-        fontsize=10,
-        family="monospace",
-        transform=ax.transAxes,
-        va="center",
+    # Sort the permutations by total ROSI descending
+    sorted_permutations = sorted(
+        simulate_all_permutations, key=lambda x: x["total_rosi"], reverse=True
+    )
+    best_permutation = sorted_permutations[0]["permutation"]
+    best_rosi = sorted_permutations[0]["total_rosi"]
+
+    # Run sensitivity analysis
+    sensitivity_results = perform_sensitivity_analysis(
+        asset_value, ef_range, aro_range, cost_adjustment_range, control_costs, control_reductions, output_png_file
     )
 
-# Create summary table (bottom row, centered)
-ax = plt.subplot(gs[1, 2:4])
-ax.axis("off")
+    # Initialize a results dictionary
+    results = {
+        "simulation_parameters": {
+            "asset_value": asset_value,
+            "ef_range": ef_range,
+            "aro_range": aro_range,
+            "control_reductions": control_reductions,
+            "control_costs": control_costs,
+            "cost_adjustment_range": cost_adjustment_range,
+            "num_samples": num_samples,
+            "num_years": num_years,
+            "kurtosis": kurtosis,
+        },
+        "results": {
+            "best_permutation": best_permutation,
+            "best_rosi": best_rosi,
+            "control_cost_values": control_cost_values,
+        },
+        "ranked_permutations": sorted_permutations,
+        "sensitivity_results": sensitivity_results,
+    }
 
-summary_stats = [
-    "Best Configuration Summary",
-    "------------------------",
-    f"Input Asset Value: ${ASSET_VALUE:,.0f}",
-    f"Input EF Range: {EF_RANGE}",
-    f"Input ARO Range: {ARO_RANGE}",
-    f"Input Control Reductions: {CONTROL_REDUCTIONS}",
-    f"Input Control Costs: {CONTROL_COSTS}",
-    f"Input Cost Adjustment Range: {COST_ADJUSTMENT_RANGE}",
-    f"Total Samples: {NUM_SAMPLES:,}",
-    f"Optimal Control Sequence: {best_permutation}",
-    f"Mean ROSI Across Years: {best_mean_rosi:.1f}%",
-    f"Initial ALE: ${ale_values[0]:,.0f}",
-    f"Final ALE: ${ale_values[-1]:,.0f}",
-    f"Total Reduction: {(1 - ale_values[-1]/ale_values[0]):.0%}",
-]
+    serializable_results = convert_to_serializable(results)
 
-ax.text(
-    0.5,
-    0.5,
-    "\n".join(summary_stats),
-    bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray"),
-    fontsize=10,
-    family="monospace",
-    transform=ax.transAxes,
-    va="center",
-    ha="center",
-)
+    with open(output_json_file, "w") as f:
+        json.dump(serializable_results, f, indent=4)
 
-plt.tight_layout()
-plt.savefig("rqmc_sobol_test.png")
+
+def main():
+    test = load_csv_data("rqmc_sobol_example.csv")
+    for data in test["data"]:
+        simulate_control_sequence_optimization(
+            data["asset_value"],
+            data["ef_range"],
+            data["aro_range"],
+            data["control_costs"],
+            data["cost_adjustment_range"],
+            data["control_reductions"],
+            data["num_years"],
+            output_json_file="test.json",
+            output_png_file="sensitivity_analysis.png",
+        )
+
+
+if __name__ == "__main__":
+    main()
+
+# TODO: Add more visualization options and allow option for aggregated or per-year results
