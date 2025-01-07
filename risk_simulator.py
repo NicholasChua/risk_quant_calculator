@@ -4,7 +4,7 @@ from scipy.stats import beta, poisson, gaussian_kde
 import csv
 import json
 
-from mcmc_verification import verify_mcmc_implementation
+from verification import verify_mcmc_implementation
 
 MONTE_CARLO_SEED = 42
 NUM_SIMULATIONS = 10000
