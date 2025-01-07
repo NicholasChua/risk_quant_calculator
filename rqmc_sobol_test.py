@@ -714,29 +714,31 @@ def simulate_control_sequence_optimization(
     # Set random seed for reproducibility
     np.random.seed(RANDOM_SEED)
 
-    # Define one EF_i and one ARO_i per year:
-    params = {}
-    for i in range(num_years):
-        params[f"EF_{i+1}"] = ef_range
-    for i in range(num_years):
-        params[f"ARO_{i+1}"] = aro_range
+    # Define EF and ARO problems for sensitivity analysis
+    ef_params = {f"EF_{i+1}": ef_range for i in range(num_years)}
+    aro_params = {f"ARO_{i+1}": aro_range for i in range(num_years)}
 
-    problem_ef_aro = setup_sensitivity_problem(**params)
+    problem_ef = setup_sensitivity_problem(**ef_params)
+    problem_aro = setup_sensitivity_problem(**aro_params)
 
     # Generate Sobol samples for EF and ARO
-    sobol_samples_ef_aro = sobol_sample.sample(
-        problem_ef_aro, num_samples, calc_second_order=False, seed=RANDOM_SEED
+    sobol_samples_ef = sobol_sample.sample(
+        problem_ef, num_samples, calc_second_order=False, seed=RANDOM_SEED
+    )
+    sobol_samples_aro = sobol_sample.sample(
+        problem_aro, num_samples, calc_second_order=False, seed=RANDOM_SEED
     )
 
     # Randomize Sobol samples to avoid correlation with cost adjustments
-    sobol_samples_ef_aro = randomize_sobol_samples(sobol_samples_ef_aro)
+    sobol_samples_ef = randomize_sobol_samples(sobol_samples_ef)
+    sobol_samples_aro = randomize_sobol_samples(sobol_samples_aro)
 
-    # Slice the first NUM_YEARS columns for EF, and the next NUM_YEARS columns for ARO:
+    # Simulate EF and ARO using the randomized Sobol samples
     ef_samples = simulate_exposure_factor_sobol(
-        sobol_samples_ef_aro[:, :num_years], ef_range, kurtosis
+        sobol_samples_ef, ef_range, kurtosis
     )
     aro_samples = simulate_annual_rate_of_occurrence_sobol(
-        sobol_samples_ef_aro[:, num_years:], aro_range
+        sobol_samples_aro, aro_range
     )
 
     # Calculate compounding costs for each control
