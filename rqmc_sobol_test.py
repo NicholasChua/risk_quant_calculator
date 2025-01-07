@@ -1,3 +1,4 @@
+from matplotlib.gridspec import GridSpec
 import numpy as np
 from scipy.stats import beta, poisson
 from itertools import permutations
@@ -633,29 +634,44 @@ def perform_sensitivity_analysis(
     return Si, problem
 
 
-def plot_sensitivity_analysis(
-    Si: dict[str, float], problem: dict[str, list[str]], output_file: str
+def plot_combined_analysis(
+    Si: dict[str, float],
+    problem: dict[str, list[str]],
+    sorted_permutations: list[dict[str, float]],
+    control_cost_values: dict[str, dict[str, dict[str, np.float64]]],
+    control_reductions: list[float],
+    best_permutation_data: dict[str, float],
+    output_file: str,
+    results: dict[str, any],
 ) -> None:
-    """Plot the results of the sensitivity analysis.
+    """Plot a combined analysis of sensitivity analysis, permutations by weighted risk reduction, and ALE progression for the best-performing permutation.
 
     Args:
         Si: Sensitivity analysis results
         problem: Problem definition used in the sensitivity analysis
-        output_file: Output file to save the sensitivity analysis plot
+        sorted_permutations: List of sorted permutations with total ROSI values
+        control_cost_values: Dictionary of costs and adjustments for each control, for each year
+        control_reductions: List of control reduction percentages
+        best_permutation_data: Data for the best-performing permutation
+        output_file: Output file to save the plot
+        result: Results of the simulation
 
     Returns:
         None
     """
-    # Visualize results
-    plt.figure(figsize=(10, 6))
-    plt.bar(
+    fig = plt.figure(figsize=(19.2, 10.8))  # Set figure size to 1920x1080 pixels
+    gs = GridSpec(2, 2, figure=fig)
+
+    # Sensitivity Analysis Plot (Top Left)
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax1.bar(
         problem["names"],
         Si["S1"],
         yerr=Si["S1_conf"],
         label="First Order",
         color="blue",
     )
-    plt.bar(
+    ax1.bar(
         problem["names"],
         Si["ST"],
         yerr=Si["ST_conf"],
@@ -663,34 +679,21 @@ def plot_sensitivity_analysis(
         label="Total Order",
         color="orange",
     )
-    plt.xlabel("Parameters")
-    plt.ylabel("Sensitivity Index")
-    plt.legend()
-    plt.title("Parameter Sensitivity Analysis")
-    plt.tight_layout()
-    if output_file:
-        plt.savefig(output_file)
 
+    # Add annotations to the bars, S1 on the top and ST on the bottom
+    for i, (_, s1, st) in enumerate(
+        zip(problem["names"], Si["S1"], Si["ST"])
+    ):
+        ax1.text(i, s1, f"{s1:.2f}", ha="left", va="bottom")
+        ax1.text(i, st, f"{st:.2f}", ha="right", va="top")
 
-def plot_permutations_by_weighted_risk_reduction(
-    sorted_permutations: list[dict[str, float]],
-    control_cost_values: dict[str, dict[str, dict[str, np.float64]]],
-    control_reductions: list[float],
-    output_file: str,
-    show_all_annotations: bool = False,
-) -> None:
-    """Plot permutations by weighted risk reduction and mean ROSI in a scatter plot, highlighting the best-performing permutation. Weighted risk reduction is calculated as the sum of control costs multiplied by the control reduction percentages. The best-performing permutation is the one with the highest mean ROSI.
+    ax1.set_xlabel("Parameters")
+    ax1.set_ylabel("Sensitivity Index")
+    ax1.legend()
+    ax1.set_title("Parameter Sensitivity Analysis")
 
-    Args:
-        sorted_permutations: List of sorted permutations with total ROSI values
-        control_cost_values: Dictionary of costs and adjustments for each control, for each year
-        control_reductions: List of control reduction percentages
-        output_file: Output file to save the plot
-        show_all_annotations: Boolean to show annotations for all points. Default is False
-
-    Returns:
-        None
-    """
+    # Scatter Plot (Top Right)
+    ax2 = fig.add_subplot(gs[0, 1])
     weighted_reductions = []
     mean_rosi_values = []
     permutations = []
@@ -702,9 +705,7 @@ def plot_permutations_by_weighted_risk_reduction(
         # Calculate total weighted risk reduction for the permutation
         total_weighted_reduction = 0
         for year, control in enumerate(permutation, start=1):
-            control_cost = control_cost_values[f"year_{year}"][f"control_{control}"][
-                "cost"
-            ]
+            control_cost = control_cost_values[f"year_{year}"][f"control_{control}"]["cost"]
             control_reduction = control_reductions[control - 1]
             total_weighted_reduction += control_cost * control_reduction
 
@@ -712,62 +713,30 @@ def plot_permutations_by_weighted_risk_reduction(
         mean_rosi_values.append(mean_rosi)
         permutations.append(permutation)
 
-    # Plot scatter
-    plt.figure(figsize=(10, 6))
-    plt.scatter(weighted_reductions, mean_rosi_values, alpha=0.7, label="Permutations")
+    ax2.scatter(weighted_reductions, mean_rosi_values, alpha=0.7, label="Permutations")
 
     # Highlight best-performing permutation
     best_index = mean_rosi_values.index(max(mean_rosi_values))
-    plt.scatter(
+    ax2.scatter(weighted_reductions[best_index], mean_rosi_values[best_index], 
+                color='red', label='Best Permutation', zorder=5)
+
+    # Show the best-performing permutation annotation
+    ax2.text(
         weighted_reductions[best_index],
         mean_rosi_values[best_index],
-        color="red",
-        label="Best Permutation",
-        zorder=5,
+        str(permutations[best_index]),
+        fontsize=8,
+        ha="right",
     )
 
-    # Decide which annotations to show
-    if show_all_annotations:
-        for i, permutation in enumerate(permutations):
-            plt.text(
-                weighted_reductions[i],
-                mean_rosi_values[i],
-                str(permutation),
-                fontsize=8,
-                ha="right",
-            )
-    else:
-        plt.text(
-            weighted_reductions[best_index],
-            mean_rosi_values[best_index],
-            str(permutations[best_index]),
-            fontsize=8,
-            ha="right",
-        )
+    ax2.set_xlabel("Total Weighted Risk Reduction")
+    ax2.set_ylabel("Mean ROSI (%)")
+    ax2.set_title("Permutations by Mean ROSI vs. Weighted Risk Reduction")
+    ax2.legend()
+    ax2.grid(True)
 
-    # Add labels and title
-    plt.xlabel("Total Weighted Risk Reduction")
-    plt.ylabel("Mean ROSI (%)")
-    plt.title("Permutations by Mean ROSI vs. Weighted Risk Reduction")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    if output_file:
-        plt.savefig(output_file)
-
-
-def plot_ale_progression_by_year(
-    best_permutation_data: dict[str, float], output_file: str
-) -> None:
-    """Plot the year-by-year ALE progression before and after implementing controls for the best-performing permutation.
-
-    Args:
-        best_permutation_data: Data for the best-performing permutation
-        output_file: Output file to save the plot
-
-    Returns:
-        None
-    """
+    # ALE Progression Plot (Bottom Left)
+    ax3 = fig.add_subplot(gs[1, 0])
     years = []
     ale_values = []
 
@@ -776,50 +745,50 @@ def plot_ale_progression_by_year(
         years.append(year)
         ale_values.append(best_permutation_data[f"year_{year}"]["ale_after"])
 
-    # Plot ALE before and after controls
-    plt.figure(figsize=(10, 6))
-    plt.plot(
-        years,
-        ale_values,
-        label="ALE After Controls",
-        marker="o",
-        linestyle="-",
-        color="green",
-    )
+    ax3.plot(years, ale_values, label="ALE After Controls", marker="o", linestyle="-", color="green")
 
-    # Add ALE values as annotations with smart positioning to avoid overlap with the line
-    padding = 0.02 * (max(ale_values) - min(ale_values))
+    # Add ALE values as annotations with smart positioning
+    padding = 0.02 * (max(ale_values) - min(ale_values))  # Adjust padding as needed
     for i, ale in enumerate(ale_values):
-        # Check if the current ALE is lower than the previous and next ALE values
-        if (i > 0 and ale_values[i - 1] < ale) and (
-            i < len(ale_values) - 1 and ale_values[i + 1] < ale
-        ):
+        if (i > 0 and ale_values[i - 1] < ale) and (i < len(ale_values) - 1 and ale_values[i + 1] < ale):
             # Place annotation on top
-            plt.text(
-                years[i],
-                ale + (padding / 2),
-                f"{ale:.2f}",
-                fontsize=8,
-                ha="center",
-                va="bottom",
-            )
+            ax3.text(years[i], ale + padding, f"{ale:.2f}", fontsize=8, ha='center', va='bottom')
         else:
             # Place annotation below
-            plt.text(
-                years[i], ale - padding, f"{ale:.2f}", fontsize=8, ha="center", va="top"
-            )
+            ax3.text(years[i], ale - padding, f"{ale:.2f}", fontsize=8, ha='center', va='top')
 
-    # Add labels and title
-    plt.xlabel("Year")
-    plt.xticks(years)  # Set x-axis to show only discrete years
-    plt.ylabel("Annualized Loss Expectancy (ALE)")
-    plt.title("Year-by-Year ALE Progression")
-    plt.legend()
-    plt.grid(True)
+    ax3.set_xlabel("Year")
+    ax3.set_ylabel("Annualized Loss Expectancy (ALE)")
+    ax3.set_title("Year-by-Year ALE Progression")
+    ax3.legend()
+    ax3.grid(True)
+    ax3.set_xticks(years)
+
+    # Statistics (Bottom Right)
+    # Calculate statistics required
+    final_year = len(best_permutation_data["permutation"])
+    total_final_year_cost = sum(
+        control_cost_values[f"year_{final_year}"][f"control_{control}"]["cost"]
+        for control in best_permutation_data["permutation"]
+    )
+    # Determine total cost over all years via ranked permutations[0] > year_x > total_cost
+    total_cost = sum(
+        control_cost_values[f"year_{year}"][f"control_{control}"]["cost"]
+        for year, control in enumerate(permutations[0], start=1)
+    )
+
+    ax4 = fig.add_subplot(gs[1, 1])
+    ax4.axis("off")
+    stats_text = f"""
+    Best Permutation: {best_permutation_data["permutation"]}
+    Best ROSI: {best_permutation_data["total_rosi"]:.2f}%
+    Cost as of Final Year: {total_final_year_cost:.2f}
+    Total Cost over {final_year} Years: {total_cost:.2f}
+    """
+    ax4.text(0.5, 0.5, stats_text, ha="center", va="center", fontsize=12)
+
     plt.tight_layout()
-
-    if output_file:
-        plt.savefig(output_file)
+    plt.savefig(output_file)
 
 
 def simulate_control_sequence_optimization(
@@ -967,17 +936,16 @@ def simulate_control_sequence_optimization(
         json.dump(serializable_results, f, indent=4)
 
     # TODO: Combine plotting functions into a single plot output
-
-    # Plot sensitivity analysis
-    plot_sensitivity_analysis(sensitivity_results, problem, output_png_file)
-
-    # # Plot permutations by weighted risk reduction and mean ROSI
-    plot_permutations_by_weighted_risk_reduction(
-        sorted_permutations, control_cost_values, control_reductions, "scatter.png"
+    plot_combined_analysis(
+        sensitivity_results,
+        problem,
+        sorted_permutations,
+        control_cost_values,
+        control_reductions,
+        sorted_permutations[0],
+        output_png_file,
+        results,
     )
-
-    # # Plot ALE progression by year for the best-performing permutation
-    plot_ale_progression_by_year(sorted_permutations[0], "ale_progression.png")
 
 
 def main():
@@ -992,7 +960,7 @@ def main():
             data["control_reductions"],
             data["num_years"],
             output_json_file="test.json",
-            output_png_file="sensitivity_analysis.png",
+            output_png_file="combined_analysis.png",
         )
 
 
