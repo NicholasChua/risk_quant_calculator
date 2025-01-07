@@ -588,7 +588,7 @@ def perform_sensitivity_analysis(
     control_costs: list[float],
     control_reductions: list[float],
     num_samples: int = NUM_SAMPLES,
-) -> dict:
+) -> tuple[dict[str, float], dict[str, list[str]]]:
     """Perform Sobol sensitivity analysis on the model using the specified number of samples.
 
     Args:
@@ -601,7 +601,7 @@ def perform_sensitivity_analysis(
         num_samples: Number of samples to generate for sensitivity analysis. Default is NUM_SAMPLES
 
     Returns:
-        dict: Sensitivity analysis results
+        tuple[dict[str, float], dict[str, list[str]]]: Sensitivity analysis results and problem definition
     """
     problem = setup_sensitivity_problem(
         EF_variance=ef_range,
@@ -630,10 +630,12 @@ def perform_sensitivity_analysis(
         problem_array, Y, calc_second_order=False, seed=RANDOM_SEED
     )
 
-    return Si
+    return Si, problem
 
 
-def plot_sensitivity_analysis(Si: dict, problem: dict, output_file: str) -> None:
+def plot_sensitivity_analysis(
+    Si: dict[str, float], problem: dict[str, list[str]], output_file: str
+) -> None:
     """Plot the results of the sensitivity analysis.
 
     Args:
@@ -666,7 +668,8 @@ def plot_sensitivity_analysis(Si: dict, problem: dict, output_file: str) -> None
     plt.legend()
     plt.title("Parameter Sensitivity Analysis")
     plt.tight_layout()
-    plt.savefig(output_file)
+    if output_file:
+        plt.savefig(output_file)
 
 
 def plot_permutations_by_weighted_risk_reduction(
@@ -749,7 +752,8 @@ def plot_permutations_by_weighted_risk_reduction(
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(output_file)
+    if output_file:
+        plt.savefig(output_file)
 
 
 def plot_ale_progression_by_year(
@@ -807,17 +811,15 @@ def plot_ale_progression_by_year(
 
     # Add labels and title
     plt.xlabel("Year")
+    plt.xticks(years)  # Set x-axis to show only discrete years
     plt.ylabel("Annualized Loss Expectancy (ALE)")
     plt.title("Year-by-Year ALE Progression")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
 
-    # Set x-axis to show only discrete years
-    plt.xticks(years)
-
-    # Show the plot
-    plt.savefig(output_file)
+    if output_file:
+        plt.savefig(output_file)
 
 
 def simulate_control_sequence_optimization(
@@ -928,7 +930,7 @@ def simulate_control_sequence_optimization(
     best_rosi = sorted_permutations[0]["total_rosi"]
 
     # Run sensitivity analysis
-    sensitivity_results = perform_sensitivity_analysis(
+    sensitivity_results, problem = perform_sensitivity_analysis(
         asset_value,
         ef_range,
         aro_range,
@@ -967,15 +969,15 @@ def simulate_control_sequence_optimization(
     # TODO: Combine plotting functions into a single plot output
 
     # Plot sensitivity analysis
-    # plot_sensitivity_analysis(sensitivity_results, problem_ef, output_png_file)
+    plot_sensitivity_analysis(sensitivity_results, problem, output_png_file)
 
-    # Plot permutations by weighted risk reduction and mean ROSI
-    # plot_permutations_by_weighted_risk_reduction(
-    #     sorted_permutations, control_cost_values, control_reductions
-    # )
+    # # Plot permutations by weighted risk reduction and mean ROSI
+    plot_permutations_by_weighted_risk_reduction(
+        sorted_permutations, control_cost_values, control_reductions, "scatter.png"
+    )
 
-    # Plot ALE progression by year for the best-performing permutation
-    # plot_ale_progression_by_year(sorted_permutations[0])
+    # # Plot ALE progression by year for the best-performing permutation
+    plot_ale_progression_by_year(sorted_permutations[0], "ale_progression.png")
 
 
 def main():
