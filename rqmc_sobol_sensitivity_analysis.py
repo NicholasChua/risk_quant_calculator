@@ -16,6 +16,7 @@ from risk_simulator import (
 RANDOM_SEED = 42
 NUM_SAMPLES = 16384  # Number of Sobol samples 2^14
 KURTOSIS = 1.7  # Results in alpha and beta of 0.5
+CURRENCY_SYMBOL = "\\$"
 
 
 def load_csv_data(
@@ -233,6 +234,7 @@ def calculate_compounding_costs(
     control_costs: list[float],
     cost_adjustment_range: list[float],
     years: int,
+    cost_adjustment_samples: np.ndarray,
     num_samples: int = NUM_SAMPLES,
 ) -> dict[str, dict[str, dict[str, np.float64]]]:
     """Given a list of control costs, a cost adjustment range, and a number of years, calculate the cost for each control for each year.
@@ -241,6 +243,7 @@ def calculate_compounding_costs(
         control_costs: Base annualized cost of controls
         cost_adjustment_range: Cost adjustment per year range
         years: Number of years to simulate
+        cost_adjustment_samples: Simulated cost adjustments
         num_samples: Number of samples to simulate. Default is NUM_SAMPLES
 
     Returns:
@@ -248,22 +251,6 @@ def calculate_compounding_costs(
     """
     # Initialize costs dictionary
     costs = {}
-
-    # Define the problem for cost adjustments using setup_sensitivity_problem
-    problem = setup_sensitivity_problem(
-        **{
-            f"cost_adj_{i}": cost_adjustment_range
-            for i in range(len(control_costs) * years)
-        }
-    )
-
-    # Generate Sobol samples for cost adjustments. Number of sobol samples is equal to samples * dimensions (years * controls)
-    sobol_samples = sobol_sample.sample(
-        problem, num_samples, calc_second_order=False, seed=RANDOM_SEED
-    )
-
-    # Randomize Sobol samples to avoid correlation with EF and ARO
-    sobol_samples = randomize_sobol_samples(sobol_samples)
 
     # Year 0 is the base cost and has no adjustment
     costs["year_0"] = {
@@ -286,8 +273,8 @@ def calculate_compounding_costs(
             # Use mean of multiple Sobol samples for adjustment
             sample_start = ((year - 1) * len(control_costs) + index) * n_avg
             sample_end = sample_start + n_avg
-            adjustment_values = sobol_samples[
-                sample_start:sample_end, sample_start // n_avg
+            adjustment_values = cost_adjustment_samples[
+                sample_start:sample_end, index % cost_adjustment_samples.shape[1]
             ]
             adjustment_mean = adjustment_values.mean()
             adjustment = np.float64(
@@ -637,60 +624,76 @@ def perform_sensitivity_analysis(
 def plot_combined_analysis(
     Si: dict[str, float],
     problem: dict[str, list[str]],
-    sorted_permutations: list[dict[str, float]],
-    control_cost_values: dict[str, dict[str, dict[str, np.float64]]],
-    control_reductions: list[float],
-    best_permutation_data: dict[str, float],
+    exported_results: dict[str, any],
     output_file: str,
-    results: dict[str, any],
+    currency_symbol: str = CURRENCY_SYMBOL,
 ) -> None:
-    """Plot a combined analysis of sensitivity analysis, permutations by weighted risk reduction, and ALE progression for the best-performing permutation.
+    """Plot a combined analysis of sensitivity analysis, permutation effectiveness, and ALE progression for the best-performing permutation. Also provide statistics on the input parameters and simulation results.
+
+    The results appear in a 2x2 grid layout with the following plots:
+        - Top Left - Parameter Sensitivity Analysis: Bar plot showing the first order and total order sensitivity indices for each parameter
+        - Top Right - Scatter Plot of Permutations: Scatter plot showing the permutations by weighted risk reduction and mean ROSI, highlighting the best-performing permutation
+        - Bottom Left - Year-by-Year ALE Progression: Line plot showing the year-by-year ALE progression for the best-performing permutation
+        - Bottom Right - Statistics: Table showing the input parameters and simulation results
 
     Args:
         Si: Sensitivity analysis results
         problem: Problem definition used in the sensitivity analysis
-        sorted_permutations: List of sorted permutations with total ROSI values
-        control_cost_values: Dictionary of costs and adjustments for each control, for each year
-        control_reductions: List of control reduction percentages
-        best_permutation_data: Data for the best-performing permutation
+        exported_results: Exported results from the simulation
         output_file: Output file to save the plot
-        result: Results of the simulation
+        currency_symbol: Currency symbol to use in the statistics table. Default is CURRENCY_SYMBOL
 
     Returns:
         None
     """
-    fig = plt.figure(figsize=(19.2, 10.8))  # Set figure size to 1920x1080 pixels
+    # Set figure size to 1920x1080 pixels and create a grid layout
+    fig = plt.figure(figsize=(19.2, 10.8))
     gs = GridSpec(2, 2, figure=fig)
 
     # Sensitivity Analysis Plot (Top Left)
     ax1 = fig.add_subplot(gs[0, 0])
+    bar_width = 0.35  # Width of the bars
+
+    # Positions of the bars on the x-axis
+    indices = np.arange(len(problem["names"]))
+
+    # Convert sensitivity indices to percentages
+    S1_percent = [s1 * 100 for s1 in Si["S1"]]
+    ST_percent = [st * 100 for st in Si["ST"]]
+
+    # Plot S1 and ST bars next to each other
     ax1.bar(
-        problem["names"],
-        Si["S1"],
-        yerr=Si["S1_conf"],
+        indices - bar_width / 2,
+        S1_percent,
+        bar_width,
         label="First Order",
         color="blue",
     )
     ax1.bar(
-        problem["names"],
-        Si["ST"],
-        yerr=Si["ST_conf"],
-        alpha=0.5,
+        indices + bar_width / 2,
+        ST_percent,
+        bar_width,
         label="Total Order",
         color="orange",
+        alpha=0.5,
     )
 
-    # Add annotations to the bars, S1 on the top and ST on the bottom
-    for i, (_, s1, st) in enumerate(
-        zip(problem["names"], Si["S1"], Si["ST"])
-    ):
-        ax1.text(i, s1, f"{s1:.2f}", ha="left", va="bottom")
-        ax1.text(i, st, f"{st:.2f}", ha="right", va="top")
+    # Add annotations to the bars
+    for i, (s1, st) in enumerate(zip(S1_percent, ST_percent)):
+        ax1.text(i - bar_width / 2, s1, f"{s1:.2f}%", ha="center", va="bottom")
+        ax1.text(i + bar_width / 2, st, f"{st:.2f}%", ha="center", va="bottom")
 
     ax1.set_xlabel("Parameters")
-    ax1.set_ylabel("Sensitivity Index")
+    ax1.set_ylabel("Sensitivity Index (%)")
+    ax1.set_xticks(indices)
+    ax1.set_xticklabels(problem["names"])
     ax1.legend()
     ax1.set_title("Parameter Sensitivity Analysis")
+
+    # Set Y axis limit to the next value up after the highest value
+    max_value_sensitivity = max(max(S1_percent), max(ST_percent))
+    y_max = (int(max_value_sensitivity / 10) + 1) * 10
+    ax1.set_ylim(0, y_max)
 
     # Scatter Plot (Top Right)
     ax2 = fig.add_subplot(gs[0, 1])
@@ -698,15 +701,15 @@ def plot_combined_analysis(
     mean_rosi_values = []
     permutations = []
 
-    for permutation_data in sorted_permutations:
+    for permutation_data in exported_results["ranked_permutations"]:
         permutation = permutation_data["permutation"]
         mean_rosi = permutation_data["total_rosi"]
 
         # Calculate total weighted risk reduction for the permutation
         total_weighted_reduction = 0
         for year, control in enumerate(permutation, start=1):
-            control_cost = control_cost_values[f"year_{year}"][f"control_{control}"]["cost"]
-            control_reduction = control_reductions[control - 1]
+            control_cost = exported_results["results"]["control_cost_values"][f"year_{year}"][f"control_{control}"]["cost"]
+            control_reduction = exported_results["simulation_parameters"]["control_reductions"][control - 1]
             total_weighted_reduction += control_cost * control_reduction
 
         weighted_reductions.append(total_weighted_reduction)
@@ -717,8 +720,13 @@ def plot_combined_analysis(
 
     # Highlight best-performing permutation
     best_index = mean_rosi_values.index(max(mean_rosi_values))
-    ax2.scatter(weighted_reductions[best_index], mean_rosi_values[best_index], 
-                color='red', label='Best Permutation', zorder=5)
+    ax2.scatter(
+        weighted_reductions[best_index],
+        mean_rosi_values[best_index],
+        color="red",
+        label="Best Permutation",
+        zorder=5,
+    )
 
     # Show the best-performing permutation annotation
     ax2.text(
@@ -729,9 +737,9 @@ def plot_combined_analysis(
         ha="right",
     )
 
-    ax2.set_xlabel("Total Weighted Risk Reduction")
+    ax2.set_xlabel(f"Total Weighted Risk Reduction ({currency_symbol})")
     ax2.set_ylabel("Mean ROSI (%)")
-    ax2.set_title("Permutations by Mean ROSI vs. Weighted Risk Reduction")
+    ax2.set_title("Scatter Plot of Permutations by Weighted Risk Reduction/ROSI")
     ax2.legend()
     ax2.grid(True)
 
@@ -741,50 +749,70 @@ def plot_combined_analysis(
     ale_values = []
 
     # Extract ALE data year-by-year
-    for year in range(1, len(best_permutation_data["permutation"]) + 1):
+    for year in range(1, len(exported_results["results"]["best_permutation"]) + 1):
         years.append(year)
-        ale_values.append(best_permutation_data[f"year_{year}"]["ale_after"])
+        ale_values.append(exported_results["ranked_permutations"][0][f"year_{year}"]["ale_after"])
 
-    ax3.plot(years, ale_values, label="ALE After Controls", marker="o", linestyle="-", color="green")
+    ax3.plot(
+        years,
+        ale_values,
+        label="ALE After Controls",
+        marker="o",
+        linestyle="-",
+        color="green",
+    )
 
     # Add ALE values as annotations with smart positioning
-    padding = 0.02 * (max(ale_values) - min(ale_values))  # Adjust padding as needed
+    padding = 0.02 * (max(ale_values) - min(ale_values))
     for i, ale in enumerate(ale_values):
-        if (i > 0 and ale_values[i - 1] < ale) and (i < len(ale_values) - 1 and ale_values[i + 1] < ale):
+        # Check if the current ALE is lower than the previous and next ALE values
+        if (i > 0 and ale_values[i - 1] < ale) and (
+            i < len(ale_values) - 1 and ale_values[i + 1] < ale
+        ):
             # Place annotation on top
-            ax3.text(years[i], ale + padding, f"{ale:.2f}", fontsize=8, ha='center', va='bottom')
+            ax3.text(
+                years[i],
+                ale + padding,
+                f"{currency_symbol}{ale:.2f}",
+                fontsize=8,
+                ha="center",
+                va="bottom",
+            )
         else:
             # Place annotation below
-            ax3.text(years[i], ale - padding, f"{ale:.2f}", fontsize=8, ha='center', va='top')
+            ax3.text(
+                years[i], ale - padding, f"{currency_symbol}{ale:.2f}", fontsize=8, ha="center", va="top"
+            )
 
     ax3.set_xlabel("Year")
-    ax3.set_ylabel("Annualized Loss Expectancy (ALE)")
+    ax3.set_ylabel(f"Annualized Loss Expectancy (ALE) ({currency_symbol})")
     ax3.set_title("Year-by-Year ALE Progression")
     ax3.legend()
     ax3.grid(True)
     ax3.set_xticks(years)
 
     # Statistics (Bottom Right)
-    # Calculate statistics required
-    final_year = len(best_permutation_data["permutation"])
-    total_final_year_cost = sum(
-        control_cost_values[f"year_{final_year}"][f"control_{control}"]["cost"]
-        for control in best_permutation_data["permutation"]
-    )
-    # Determine total cost over all years via ranked permutations[0] > year_x > total_cost
-    total_cost = sum(
-        control_cost_values[f"year_{year}"][f"control_{control}"]["cost"]
-        for year, control in enumerate(permutations[0], start=1)
-    )
+    final_year = len(exported_results["results"]["best_permutation"])
 
     ax4 = fig.add_subplot(gs[1, 1])
     ax4.axis("off")
     stats_text = f"""
-    Best Permutation: {best_permutation_data["permutation"]}
-    Best ROSI: {best_permutation_data["total_rosi"]:.2f}%
-    Cost as of Final Year: {total_final_year_cost:.2f}
-    Total Cost over {final_year} Years: {total_cost:.2f}
-    """
+    Input Parameters:
+    Asset Value: {currency_symbol}{exported_results['simulation_parameters']['asset_value']:.2f}
+    EF Range: {exported_results['simulation_parameters']['ef_range'][0]:.2f}, {exported_results['simulation_parameters']['ef_range'][1]:.2f}
+    ARO Range: {exported_results['simulation_parameters']['aro_range'][0]:.2f}, {exported_results['simulation_parameters']['aro_range'][1]:.2f}
+    Cost Adjustment Range: {exported_results['simulation_parameters']['cost_adjustment_range'][0]:.2f}, {exported_results['simulation_parameters']['cost_adjustment_range'][1]:.2f}
+    Control Costs: {', '.join([f"{currency_symbol}{cost:.2f}" for cost in exported_results['simulation_parameters']['control_costs']])}
+    Control Reductions: {', '.join([f"{reduction:.2f}" for reduction in exported_results['simulation_parameters']['control_reductions']])}
+    Number of Simulations: {NUM_SAMPLES}
+
+    Simulation Results:
+    Best Permutation: {', '.join(map(str, exported_results["results"]["best_permutation"]))}
+    Best ROSI: {exported_results["results"]["best_rosi"]:.2f}%
+    Total Cost over {final_year} Years: {currency_symbol}{sum(exported_results["ranked_permutations"][0][f"year_{year}"]["total_cost"] for year in range(1, final_year + 1)):.2f}"""
+    for year in range(1, final_year + 1):
+        stats_text += f"\nYear {year} Cost: {currency_symbol}{exported_results['ranked_permutations'][0][f'year_{year}']['total_cost']:.2f}"
+
     ax4.text(0.5, 0.5, stats_text, ha="center", va="center", fontsize=12)
 
     plt.tight_layout()
@@ -801,6 +829,7 @@ def simulate_control_sequence_optimization(
     num_years: int,
     kurtosis: float = KURTOSIS,
     num_samples: int = NUM_SAMPLES,
+    currency_symbol: str = CURRENCY_SYMBOL,
     output_json_file: str = None,
     output_png_file: str = None,
 ) -> None:
@@ -837,6 +866,7 @@ def simulate_control_sequence_optimization(
         num_years: The number of years to simulate.
         kurtosis: The kurtosis of the distribution for the exposure factor. Default is constant KURTOSIS
         num_samples: The number of samples to generate for the simulation. Default is constant NUM_SAMPLES
+        currency_symbol: The currency symbol to use for displaying monetary values. Default is constant CURRENCY_SYMBOL
         json_output_file: The output JSON file to save the simulation results. Default is None
         png_output_file: The output PNG file to save the simulation results. Default is None
 
@@ -846,32 +876,40 @@ def simulate_control_sequence_optimization(
     # Set random seed for reproducibility
     np.random.seed(RANDOM_SEED)
 
-    # Define EF and ARO problems for sensitivity analysis
+    # Define EF, ARO, cost adjustment problems for sensitivity analysis
     ef_params = {f"EF_{i+1}": ef_range for i in range(num_years)}
     aro_params = {f"ARO_{i+1}": aro_range for i in range(num_years)}
+    cost_adj_params = {
+        f"cost_adj_{i+1}": cost_adjustment_range for i in range(num_years)
+    }
 
     problem_ef = setup_sensitivity_problem(**ef_params)
     problem_aro = setup_sensitivity_problem(**aro_params)
+    problem_cost_adj = setup_sensitivity_problem(**cost_adj_params)
 
-    # Generate Sobol samples for EF and ARO
+    # Generate Sobol samples for EF, ARO, and cost adjustments
     sobol_samples_ef = sobol_sample.sample(
         problem_ef, num_samples, calc_second_order=False, seed=RANDOM_SEED
     )
     sobol_samples_aro = sobol_sample.sample(
         problem_aro, num_samples, calc_second_order=False, seed=RANDOM_SEED
     )
+    sobol_samples_cost_adj = sobol_sample.sample(
+        problem_cost_adj, num_samples, calc_second_order=False, seed=RANDOM_SEED
+    )
 
-    # Randomize Sobol samples to avoid correlation with cost adjustments
+    # Randomize Sobol samples to avoid correlation with each other
     sobol_samples_ef = randomize_sobol_samples(sobol_samples_ef)
     sobol_samples_aro = randomize_sobol_samples(sobol_samples_aro)
+    sobol_samples_cost_adj = randomize_sobol_samples(sobol_samples_cost_adj)
 
-    # Simulate EF and ARO using the randomized Sobol samples
+    # Simulate EF, ARO using the randomized Sobol samples
     ef_samples = simulate_exposure_factor_sobol(sobol_samples_ef, ef_range, kurtosis)
     aro_samples = simulate_annual_rate_of_occurrence_sobol(sobol_samples_aro, aro_range)
 
     # Calculate compounding costs for each control
     control_cost_values = calculate_compounding_costs(
-        control_costs, cost_adjustment_range, num_years
+        control_costs, cost_adjustment_range, num_years, sobol_samples_cost_adj
     )
 
     # Determine permutations of control orderings (starting from 1 instead of 0)
@@ -909,7 +947,7 @@ def simulate_control_sequence_optimization(
     )
 
     # Initialize a results dictionary
-    results = {
+    exported_results = {
         "simulation_parameters": {
             "asset_value": asset_value,
             "ef_range": ef_range,
@@ -930,37 +968,34 @@ def simulate_control_sequence_optimization(
         "sensitivity_results": sensitivity_results,
     }
 
-    serializable_results = convert_to_serializable(results)
-
+    # Serialize and save the results to a JSON file
+    serializable_results = convert_to_serializable(exported_results)
     with open(output_json_file, "w") as f:
         json.dump(serializable_results, f, indent=4)
 
-    # TODO: Combine plotting functions into a single plot output
+    # Plot the combined analysis
     plot_combined_analysis(
         sensitivity_results,
         problem,
-        sorted_permutations,
-        control_cost_values,
-        control_reductions,
-        sorted_permutations[0],
+        exported_results,
         output_png_file,
-        results,
+        currency_symbol,
     )
 
 
 def main():
     test = load_csv_data("rqmc_sobol_example.csv")
-    for data in test["data"]:
+    for item in test["data"]:
         simulate_control_sequence_optimization(
-            data["asset_value"],
-            data["ef_range"],
-            data["aro_range"],
-            data["control_costs"],
-            data["cost_adjustment_range"],
-            data["control_reductions"],
-            data["num_years"],
-            output_json_file="test.json",
-            output_png_file="combined_analysis.png",
+            item["asset_value"],
+            item["ef_range"],
+            item["aro_range"],
+            item["control_costs"],
+            item["cost_adjustment_range"],
+            item["control_reductions"],
+            item["num_years"],
+            output_json_file=f"rqmc_sobol_{item['id']}.json",
+            output_png_file=f"rqmc_sobol_{item['id']}.png",
         )
 
 
