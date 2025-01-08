@@ -6,11 +6,20 @@ A risk calculation tool for approaching cybersecurity risk using statistical met
 
 This tool is designed for performing quantitative risk assessments and analyzing the monetary impact of cybersecurity risks, optionally incorporating the effectiveness of risk controls. This tool is designed to be used on the command line but its output can be easily integrated into other applications through the use of JSON.
 
+Note that in all cases, the tool applies a random seed value of 42 (through a constant) to ensure reproducibility of results. Therefore, the **same results are output** given the **same input data**. This can be beneficial for verification and validation purposes.
+
 `risk_simulator.py` - Uses Monte Carlo or Markov Chain Monte Carlo simulation to:
 - Model potential losses based on asset value, exposure factor, and rate of occurrence
 - Analyze effectiveness of risk controls through before/after comparisons
 - Generate risk distributions and loss exceedance curves
 - Calculate key risk statistics and percentiles
+
+`rqmc_sobol_sensitivity_analysis.py` - Uses Sobol sensitivity analysis with randomized quasi-Monte Carlo (RQMC) to:
+- Analyze the sensitivity of return on security investment (ROSI) to changes in input parameters
+- Optimize the permutation of implementation of risk controls given uncertainty in exposure factors, rates of occurrence, and control costs
+- Generate sensitivity indices for each input parameter
+- Rank the effectiveness of different control permutations based on ROSI
+- Calculate the cost of each control over time given a randomized range of cost adjustments
 
 ## Installation
 
@@ -290,40 +299,10 @@ id,asset_value,exposure_factor_min,exposure_factor_max,annual_rate_of_occurrence
                 }
             },
             "year_3": {
-                "control_1": {
-                    "cost": 13274.0043183641,
-                    "adjustment": 0.09782811762301102
-                },
-                "control_2": {
-                    "cost": 39809.887981635264,
-                    "adjustment": 0.10083000930788073
-                },
-                "control_3": {
-                    "cost": 26612.057677479246,
-                    "adjustment": 0.09983581346074444
-                },
-                "control_4": {
-                    "cost": 46547.046638204454,
-                    "adjustment": 0.10020396360389477
-                }
+                [ ... ]
             },
             "year_4": {
-                "control_1": {
-                    "cost": 14664.285217764822,
-                    "adjustment": 0.10473711368899592
-                },
-                "control_2": {
-                    "cost": 43757.35475288782,
-                    "adjustment": 0.09915794721837867
-                },
-                "control_3": {
-                    "cost": 29233.815748532164,
-                    "adjustment": 0.09851767581548616
-                },
-                "control_4": {
-                    "cost": 51217.02439501767,
-                    "adjustment": 0.10032812163382734
-                }
+                [ ... ]
             }
         }
     },
@@ -344,25 +323,13 @@ id,asset_value,exposure_factor_min,exposure_factor_max,annual_rate_of_occurrence
                 "rosi": 827.9963626711993
             },
             "year_2": {
-                "ale_before": 407434.8806209182,
-                "ale_after": 470368.25490106025,
-                "control_cost": 24196.39127202243,
-                "total_cost": 36287.54115721997,
-                "rosi": -273.4297014159101
+                [ ... ]
             },
             "year_3": {
-                "ale_before": 470368.25490106025,
-                "ale_after": 341748.3629076779,
-                "control_cost": 39809.887981635264,
-                "total_cost": 79695.94997747861,
-                "rosi": 61.388241221453846
+                [ ... ]
             },
             "year_4": {
-                "ale_before": 341748.3629076779,
-                "ale_after": 336426.49663550017,
-                "control_cost": 51217.02439501767,
-                "total_cost": 138872.48011420248,
-                "rosi": -96.16780353616407
+                [ ... ]
             }
         },
         [ ... ]
