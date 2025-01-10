@@ -1,3 +1,4 @@
+from textwrap import wrap
 from matplotlib.gridspec import GridSpec
 import numpy as np
 from scipy.stats import beta, poisson
@@ -476,14 +477,14 @@ def convert_to_serializable(obj: any) -> any:
 
 def setup_sensitivity_problem(
     **kwargs: dict[str, list[float]]
-) -> dict[str, list[float]]:
+) -> dict[str, int | list[str] | list[float]]:
     """Define the model inputs and their bounds for sensitivity analysis.
 
     Args:
         **kwargs: Dictionary of parameter names and their bounds in a list with two floats
 
     Returns:
-        dict[str, list[float]]: Problem dictionary for sensitivity analysis
+        dict[str, int | list[str] | list[float]]: Problem dictionary for sensitivity analysis
 
     Raises:
         ValueError: If the parameter values are not lists of two floats
@@ -519,7 +520,7 @@ def evaluate_model(
     control_costs: list[float],
     control_reductions: list[float],
     X: np.ndarray,
-    problem: dict,
+    problem: dict[str, int | list[str] | list[float]],
 ) -> np.array:
     """Evaluate model for sensitivity analysis samples. The model calculates the ROSI for each sample. Each row in X corresponds to one set of parameter values, in the same order as problem["names"].
 
@@ -533,6 +534,7 @@ def evaluate_model(
         control_costs: List of control costs, expressed in monetary units
         control_reductions: List of control reduction percentages, expressed as decimals
         X: Samples generated for sensitivity analysis
+        problem: Problem dictionary for sensitivity analysis
 
     Returns:
         np.array: ROSI values for each sample
@@ -708,8 +710,12 @@ def plot_combined_analysis(
         # Calculate total weighted risk reduction for the permutation
         total_weighted_reduction = 0
         for year, control in enumerate(permutation, start=1):
-            control_cost = exported_results["results"]["control_cost_values"][f"year_{year}"][f"control_{control}"]["cost"]
-            control_reduction = exported_results["simulation_parameters"]["control_reductions"][control - 1]
+            control_cost = exported_results["results"]["control_cost_values"][
+                f"year_{year}"
+            ][f"control_{control}"]["cost"]
+            control_reduction = exported_results["simulation_parameters"][
+                "control_reductions"
+            ][control - 1]
             total_weighted_reduction += control_cost * control_reduction
 
         weighted_reductions.append(total_weighted_reduction)
@@ -751,7 +757,9 @@ def plot_combined_analysis(
     # Extract ALE data year-by-year
     for year in range(1, len(exported_results["results"]["best_permutation"]) + 1):
         years.append(year)
-        ale_values.append(exported_results["ranked_permutations"][0][f"year_{year}"]["ale_after"])
+        ale_values.append(
+            exported_results["ranked_permutations"][0][f"year_{year}"]["ale_after"]
+        )
 
     ax3.plot(
         years,
@@ -781,7 +789,12 @@ def plot_combined_analysis(
         else:
             # Place annotation below
             ax3.text(
-                years[i], ale - padding, f"{currency_symbol}{ale:.2f}", fontsize=8, ha="center", va="top"
+                years[i],
+                ale - padding,
+                f"{currency_symbol}{ale:.2f}",
+                fontsize=8,
+                ha="center",
+                va="top",
             )
 
     ax3.set_xlabel("Year")
@@ -796,24 +809,53 @@ def plot_combined_analysis(
 
     ax4 = fig.add_subplot(gs[1, 1])
     ax4.axis("off")
-    stats_text = f"""
-    Input Parameters:
-    Asset Value: {currency_symbol}{exported_results['simulation_parameters']['asset_value']:.2f}
-    EF Range: {exported_results['simulation_parameters']['ef_range'][0]:.2f}, {exported_results['simulation_parameters']['ef_range'][1]:.2f}
-    ARO Range: {exported_results['simulation_parameters']['aro_range'][0]:.2f}, {exported_results['simulation_parameters']['aro_range'][1]:.2f}
-    Cost Adjustment Range: {exported_results['simulation_parameters']['cost_adjustment_range'][0]:.2f}, {exported_results['simulation_parameters']['cost_adjustment_range'][1]:.2f}
-    Control Costs: {', '.join([f"{currency_symbol}{cost:.2f}" for cost in exported_results['simulation_parameters']['control_costs']])}
-    Control Reductions: {', '.join([f"{reduction:.2f}" for reduction in exported_results['simulation_parameters']['control_reductions']])}
-    Number of Simulations: {NUM_SAMPLES}
 
-    Simulation Results:
-    Best Permutation: {', '.join(map(str, exported_results["results"]["best_permutation"]))}
-    Best ROSI: {exported_results["results"]["best_rosi"]:.2f}%
-    Total Cost over {final_year} Years: {currency_symbol}{sum(exported_results["ranked_permutations"][0][f"year_{year}"]["total_cost"] for year in range(1, final_year + 1)):.2f}"""
+    # Define sections of text
+    scenario_text = f"""Scenario: You have an asset value of {currency_symbol}{exported_results['simulation_parameters']['asset_value']:.2f} and want to implement {final_year} security controls over {final_year} years at a rate of one control per year. You predict the exposure factor to be between {exported_results['simulation_parameters']['ef_range'][0]:.2f} and {exported_results['simulation_parameters']['ef_range'][1]:.2f} and the annual rate of occurrence to be between {exported_results['simulation_parameters']['aro_range'][0]:.2f} and {exported_results['simulation_parameters']['aro_range'][1]:.2f}. You predict the controls to have an annual (compounding) cost adjustment between {exported_results['simulation_parameters']['cost_adjustment_range'][0] * 100:.1f}% and {exported_results['simulation_parameters']['cost_adjustment_range'][1] * 100:.1f}%."""
+
+    controls_text = f"""You are considering the following controls: {', '.join([
+    f"Control {i} (yearly cost: {currency_symbol}{cost:.2f}, reduction: {reduction * 100:.1f}%)" 
+    for i, (cost, reduction) in enumerate(
+        zip(
+            exported_results['simulation_parameters']['control_costs'],
+            exported_results['simulation_parameters']['control_reductions']
+        ),
+        start=1
+    )
+])}."""
+
+    purpose_text = """Given these parameters, you want to know the optimal sequence of controls to implement to maximize the Return on Security Investment (ROSI) over those years. You also want to know the impact of varying the exposure factor, annual rate of occurrence, and control costs on the ROSI."""
+
+    results_text = f"""Result: Over {NUM_SAMPLES} simulations, we find that the best-performing permutation is {', '.join(map(str, exported_results["results"]["best_permutation"]))}, with a total ROSI of {exported_results["results"]["best_rosi"]:.2f}%. The total cost over {final_year} years is {currency_symbol}{sum(exported_results["ranked_permutations"][0][f"year_{year}"]["total_cost"] for year in range(1, final_year + 1)):.2f}.
+    """
+
+    # Add year costs
+    yearly_costs = ""
     for year in range(1, final_year + 1):
-        stats_text += f"\nYear {year} Cost: {currency_symbol}{exported_results['ranked_permutations'][0][f'year_{year}']['total_cost']:.2f}"
+        yearly_costs += f"\nYear {year} Cost: {currency_symbol}{exported_results['ranked_permutations'][0][f'year_{year}']['total_cost']:.2f}"
 
-    ax4.text(0.5, 0.5, stats_text, ha="center", va="center", fontsize=12)
+    # Wrap text sections (adjust wrap width based on your needs)
+    wrap_width = 100
+    wrapped_scenario = "\n".join(wrap(scenario_text, wrap_width))
+    wrapped_controls = "\n".join(wrap(controls_text, wrap_width))
+    wrapped_purpose = "\n".join(wrap(purpose_text, wrap_width))
+    wrapped_results = "\n".join(wrap(results_text, wrap_width))
+
+    # Combine all sections with spacing
+    full_text = f"{wrapped_scenario}\n\n{wrapped_controls}\n\n{wrapped_purpose}\n\n{wrapped_results}{yearly_costs}"
+
+    # Position text with proper alignment and smaller font
+    ax4.text(
+        0.05,
+        0.95,
+        full_text,
+        ha="left",
+        va="top",
+        fontsize=10,
+        transform=ax4.transAxes,
+        linespacing=1.5,
+        bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=10),
+    )
 
     plt.tight_layout()
     plt.savefig(output_file)
