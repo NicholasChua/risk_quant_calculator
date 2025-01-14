@@ -1,3 +1,4 @@
+import itertools
 from textwrap import wrap
 from matplotlib.gridspec import GridSpec
 import numpy as np
@@ -28,9 +29,9 @@ def load_csv_data(
     The CSV file should have the following columns in order:
         - id
         - asset_value
-        - exposure_factor_min/max
-        - annual_rate_of_occurrence_min/max
-        - cost_adjustment_min/max
+        - exposure_factor_min/max or exposure_factor only
+        - annual_rate_of_occurrence_min/max or annual_rate_of_occurrence only
+        - cost_adjustment_min/max or cost_adjustment only
         - control_reduction_i (alternating columns)
         - control_cost_i (alternating columns)
 
@@ -83,22 +84,46 @@ def load_csv_data(
                     control_reductions.append(float(row[red_key]))
                     control_costs.append(float(row[cost_key]))
 
+                # Handle exposure factor (either range or single value)
+                ef_range = (
+                    [
+                        float(row["exposure_factor_min"]),
+                        float(row["exposure_factor_max"]),
+                    ]
+                    if "exposure_factor_min" in row
+                    else [float(row["exposure_factor"]), float(row["exposure_factor"])]
+                )
+
+                # Handle annual rate of occurrence (either range or single value)
+                aro_range = (
+                    [
+                        float(row["annual_rate_of_occurrence_min"]),
+                        float(row["annual_rate_of_occurrence_max"]),
+                    ]
+                    if "annual_rate_of_occurrence_min" in row
+                    else [
+                        float(row["annual_rate_of_occurrence"]),
+                        float(row["annual_rate_of_occurrence"]),
+                    ]
+                )
+
+                # Handle cost adjustment (either range or single value)
+                cost_adj_range = (
+                    [
+                        float(row["cost_adjustment_min"]),
+                        float(row["cost_adjustment_max"]),
+                    ]
+                    if "cost_adjustment_min" in row
+                    else [float(row["cost_adjustment"]), float(row["cost_adjustment"])]
+                )
+
                 # Build risk dictionary
                 risk = {
                     "id": int(row["id"]),
                     "asset_value": float(row["asset_value"]),
-                    "ef_range": [
-                        float(row["exposure_factor_min"]),
-                        float(row["exposure_factor_max"]),
-                    ],
-                    "aro_range": [
-                        float(row["annual_rate_of_occurrence_min"]),
-                        float(row["annual_rate_of_occurrence_max"]),
-                    ],
-                    "cost_adjustment_range": [
-                        float(row["cost_adjustment_min"]),
-                        float(row["cost_adjustment_max"]),
-                    ],
+                    "ef_range": ef_range,
+                    "aro_range": aro_range,
+                    "cost_adjustment_range": cost_adj_range,
                     "control_reductions": control_reductions,
                     "control_costs": control_costs,
                     "num_years": len(control_costs),
@@ -593,11 +618,21 @@ def perform_sensitivity_analysis(
     Returns:
         tuple[dict[str, float], dict[str, list[str]]]: Sensitivity analysis results and problem definition
     """
-    problem = setup_sensitivity_problem(
-        EF_variance=ef_range,
-        ARO_variance=aro_range,
-        cost_variance=cost_adjustment_range,
-    )
+    # Skip fixed parameters in problem definition
+    problem_dict = {}
+    if ef_range[0] != ef_range[1]:
+        problem_dict["EF_variance"] = ef_range
+    if aro_range[0] != aro_range[1]:
+        problem_dict["ARO_variance"] = aro_range
+    if cost_adjustment_range[0] != cost_adjustment_range[1]:
+        problem_dict["cost_variance"] = cost_adjustment_range
+
+    # If everything is fixed, sensitivity analysis is not relevant. Return empty results in that case
+    if not problem_dict:
+        return {}, {"names": [], "num_vars": 0}
+
+    # Setup sensitivity analysis problem
+    problem = setup_sensitivity_problem(**problem_dict)
 
     # Generate samples using sobol sampler
     param_values = sobol_sample.sample(
@@ -654,48 +689,62 @@ def plot_combined_analysis(
 
     # Sensitivity Analysis Plot (Top Left)
     ax1 = fig.add_subplot(gs[0, 0])
-    bar_width = 0.35  # Width of the bars
 
-    # Positions of the bars on the x-axis
-    indices = np.arange(len(problem["names"]))
+    # Only draw if there are at least two varying parameters
+    if len(problem["names"]) < 2:
+        ax1.axis("off")
+        ax1.text(
+            0.5,
+            0.5,
+            "Sensitivity Analysis not applicable",
+            ha="center",
+            va="center",
+            fontsize=12,
+        )
+    else:
+        # Set bar width
+        bar_width = 0.35
 
-    # Convert sensitivity indices to percentages
-    S1_percent = [s1 * 100 for s1 in Si["S1"]]
-    ST_percent = [st * 100 for st in Si["ST"]]
+        # Positions of the bars on the x-axis
+        indices = np.arange(len(problem["names"]))
 
-    # Plot S1 and ST bars next to each other
-    ax1.bar(
-        indices - bar_width / 2,
-        S1_percent,
-        bar_width,
-        label="First Order",
-        color="blue",
-    )
-    ax1.bar(
-        indices + bar_width / 2,
-        ST_percent,
-        bar_width,
-        label="Total Order",
-        color="orange",
-        alpha=0.5,
-    )
+        # Convert sensitivity indices to percentages
+        S1_percent = [s1 * 100 for s1 in Si["S1"]]
+        ST_percent = [st * 100 for st in Si["ST"]]
 
-    # Add annotations to the bars
-    for i, (s1, st) in enumerate(zip(S1_percent, ST_percent)):
-        ax1.text(i - bar_width / 2, s1, f"{s1:.2f}%", ha="center", va="bottom")
-        ax1.text(i + bar_width / 2, st, f"{st:.2f}%", ha="center", va="bottom")
+        # Plot S1 and ST bars next to each other
+        ax1.bar(
+            indices - bar_width / 2,
+            S1_percent,
+            bar_width,
+            label="First Order",
+            color="blue",
+        )
+        ax1.bar(
+            indices + bar_width / 2,
+            ST_percent,
+            bar_width,
+            label="Total Order",
+            color="orange",
+            alpha=0.5,
+        )
 
-    ax1.set_xlabel("Parameters")
-    ax1.set_ylabel("Sensitivity Index (%)")
-    ax1.set_xticks(indices)
-    ax1.set_xticklabels(problem["names"])
-    ax1.legend()
-    ax1.set_title("Parameter Sensitivity Analysis")
+        # Add annotations to the bars
+        for i, (s1, st) in enumerate(zip(S1_percent, ST_percent)):
+            ax1.text(i - bar_width / 2, s1, f"{s1:.2f}%", ha="center", va="bottom")
+            ax1.text(i + bar_width / 2, st, f"{st:.2f}%", ha="center", va="bottom")
 
-    # Set Y axis limit to the next value up after the highest value
-    max_value_sensitivity = max(max(S1_percent), max(ST_percent))
-    y_max = (int(max_value_sensitivity / 10) + 1) * 10
-    ax1.set_ylim(0, y_max)
+        ax1.set_xlabel("Parameters")
+        ax1.set_ylabel("Sensitivity Index (%)")
+        ax1.set_xticks(indices)
+        ax1.set_xticklabels(problem["names"])
+        ax1.legend()
+        ax1.set_title("Parameter Sensitivity Analysis")
+
+        # Set Y axis limit to the next value up after the highest value
+        max_value_sensitivity = max(max(S1_percent), max(ST_percent))
+        y_max = (int(max_value_sensitivity / 10) + 1) * 10
+        ax1.set_ylim(0, y_max)
 
     # Scatter Plot (Top Right)
     ax2 = fig.add_subplot(gs[0, 1])
@@ -811,6 +860,7 @@ def plot_combined_analysis(
     ax4.axis("off")
 
     # Define sections of text
+    # TODO: Modify the text if range is fixed value
     scenario_text = f"""Scenario: You have an asset value of {currency_symbol}{exported_results['simulation_parameters']['asset_value']:.2f} and want to implement {final_year} security controls over {final_year} years at a rate of one control per year. You predict the exposure factor to be between {exported_results['simulation_parameters']['ef_range'][0]:.2f} and {exported_results['simulation_parameters']['ef_range'][1]:.2f} and the annual rate of occurrence to be between {exported_results['simulation_parameters']['aro_range'][0]:.2f} and {exported_results['simulation_parameters']['aro_range'][1]:.2f}. You predict the controls to have an annual (compounding) cost adjustment between {exported_results['simulation_parameters']['cost_adjustment_range'][0] * 100:.1f}% and {exported_results['simulation_parameters']['cost_adjustment_range'][1] * 100:.1f}%."""
 
     controls_text = f"""You are considering the following controls: {', '.join([
@@ -918,40 +968,86 @@ def simulate_control_sequence_optimization(
     # Set random seed for reproducibility
     np.random.seed(RANDOM_SEED)
 
-    # Define EF, ARO, cost adjustment problems for sensitivity analysis
-    ef_params = {f"EF_{i+1}": ef_range for i in range(num_years)}
-    aro_params = {f"ARO_{i+1}": aro_range for i in range(num_years)}
-    cost_adj_params = {
-        f"cost_adj_{i+1}": cost_adjustment_range for i in range(num_years)
-    }
+    # Determine if any ranges are fixed values
+    is_ef_fixed = ef_range[0] == ef_range[1]
+    is_aro_fixed = aro_range[0] == aro_range[1]
+    is_cost_fixed = cost_adjustment_range[0] == cost_adjustment_range[1]
 
-    problem_ef = setup_sensitivity_problem(**ef_params)
-    problem_aro = setup_sensitivity_problem(**aro_params)
-    problem_cost_adj = setup_sensitivity_problem(**cost_adj_params)
+    # Build a list of (param_type, year_index) only for non‐fixed parameters
+    param_order = []
+    for i in range(num_years):
+        if not is_ef_fixed:
+            param_order.append(("EF", i))
+    for i in range(num_years):
+        if not is_aro_fixed:
+            param_order.append(("ARO", i))
+    for i in range(num_years):
+        if not is_cost_fixed:
+            param_order.append(("COST", i))
 
-    # Generate Sobol samples for EF, ARO, and cost adjustments
-    sobol_samples_ef = sobol_sample.sample(
-        problem_ef, num_samples, calc_second_order=False, seed=RANDOM_SEED
-    )
-    sobol_samples_aro = sobol_sample.sample(
-        problem_aro, num_samples, calc_second_order=False, seed=RANDOM_SEED
-    )
-    sobol_samples_cost_adj = sobol_sample.sample(
-        problem_cost_adj, num_samples, calc_second_order=False, seed=RANDOM_SEED
-    )
+    # If param_order is empty, all parameters are fixed; fill slices with constants
+    if not param_order:
+        ef_slice = np.full((num_samples, num_years), ef_range[0])
+        aro_slice = np.full((num_samples, num_years), aro_range[0])
+        cost_adj_slice = np.full((num_samples, num_years), cost_adjustment_range[0])
+    else:
+        # Generate multi-dimensional Sobol samples for only the parameters that vary
+        combined_parameters = {
+            name: rng
+            for name, rng in itertools.chain(
+                ((f"EF_{i+1}", ef_range) for i in range(num_years) if not is_ef_fixed),
+                (
+                    (f"ARO_{i+1}", aro_range)
+                    for i in range(num_years)
+                    if not is_aro_fixed
+                ),
+                (
+                    (f"cost_adj_{i+1}", cost_adjustment_range)
+                    for i in range(num_years)
+                    if not is_cost_fixed
+                ),
+            )
+        }
+        problem_combined = setup_sensitivity_problem(**combined_parameters)
+        sobol_combined = sobol_sample.sample(
+            problem_combined, num_samples, calc_second_order=False, seed=RANDOM_SEED
+        )
+        sobol_combined = randomize_sobol_samples(sobol_combined)
+        # Keep the first num_samples rows as you are trying to broadcast (N*(D+1)) rows into N rows
+        # Results in shape (num_samples, D) such that later slices will work
+        sobol_combined = sobol_combined[:num_samples, :]
 
-    # Randomize Sobol samples to avoid correlation with each other
-    sobol_samples_ef = randomize_sobol_samples(sobol_samples_ef)
-    sobol_samples_aro = randomize_sobol_samples(sobol_samples_aro)
-    sobol_samples_cost_adj = randomize_sobol_samples(sobol_samples_cost_adj)
+    # Initialize slices
+    ef_slice = np.zeros((num_samples, num_years))
+    aro_slice = np.zeros((num_samples, num_years))
+    cost_adj_slice = np.zeros((num_samples, num_years))
 
-    # Simulate EF, ARO using the randomized Sobol samples
-    ef_samples = simulate_exposure_factor_sobol(sobol_samples_ef, ef_range, kurtosis)
-    aro_samples = simulate_annual_rate_of_occurrence_sobol(sobol_samples_aro, aro_range)
+    # Copy Sobol columns into slices, or fill with a fixed value
+    col = 0
+    for i in range(num_years):
+        if is_ef_fixed:
+            ef_slice[:, i] = ef_range[0]
+        else:
+            ef_slice[:, i] = sobol_combined[:, col]
+            col += 1
+    for i in range(num_years):
+        if is_aro_fixed:
+            aro_slice[:, i] = aro_range[0]
+        else:
+            aro_slice[:, i] = sobol_combined[:, col]
+            col += 1
+    for i in range(num_years):
+        if is_cost_fixed:
+            cost_adj_slice[:, i] = cost_adjustment_range[0]
+        else:
+            cost_adj_slice[:, i] = sobol_combined[:, col]
+            col += 1
 
-    # Calculate compounding costs for each control
+    # Simulate EF, ARO, and cost adjustments using Sobol samples
+    ef_samples = simulate_exposure_factor_sobol(ef_slice, ef_range, kurtosis)
+    aro_samples = simulate_annual_rate_of_occurrence_sobol(aro_slice, aro_range)
     control_cost_values = calculate_compounding_costs(
-        control_costs, cost_adjustment_range, num_years, sobol_samples_cost_adj
+        control_costs, cost_adjustment_range, num_years, cost_adj_slice
     )
 
     # Determine permutations of control orderings (starting from 1 instead of 0)
