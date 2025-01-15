@@ -242,7 +242,7 @@ id,asset_value,exposure_factor_min,exposure_factor_max,annual_rate_of_occurrence
             2,
             4
         ],
-        "best_rosi": 716.6354336615611,
+        "best_rosi": 717.5249857838003,
         "control_cost_values": {
             "year_0": {
                 "control_1": {
@@ -264,38 +264,38 @@ id,asset_value,exposure_factor_min,exposure_factor_max,annual_rate_of_occurrence
             },
             "year_1": {
                 "control_1": {
-                    "cost": 10976.198210737957,
-                    "adjustment": 0.09761982107379572
+                    "cost": 10988.562225974487,
+                    "adjustment": 0.09885622259744861
                 },
                 "control_2": {
-                    "cost": 32950.53035748249,
-                    "adjustment": 0.09835101191608281
+                    "cost": 33049.97576349127,
+                    "adjustment": 0.1016658587830423
                 },
                 "control_3": {
-                    "cost": 22008.546578651723,
-                    "adjustment": 0.10042732893258613
+                    "cost": 21972.924726080673,
+                    "adjustment": 0.09864623630403373
                 },
                 "control_4": {
-                    "cost": 38502.90541216603,
-                    "adjustment": 0.10008301177617221
+                    "cost": 38545.22556409097,
+                    "adjustment": 0.1012921589740278
                 }
             },
             "year_2": {
                 "control_1": {
-                    "cost": 12091.149885197538,
-                    "adjustment": 0.10157903975976208
+                    "cost": 12095.900302809629,
+                    "adjustment": 0.10077188025724096
                 },
                 "control_2": {
-                    "cost": 36163.51993044297,
-                    "adjustment": 0.09750949493384613
+                    "cost": 36373.98990935902,
+                    "adjustment": 0.10057538830450935
                 },
                 "control_3": {
-                    "cost": 24196.39127202243,
-                    "adjustment": 0.09940886762113198
+                    "cost": 24101.80951964268,
+                    "adjustment": 0.0968867285580393
                 },
                 "control_4": {
-                    "cost": 42307.65219726361,
-                    "adjustment": 0.0988171345608471
+                    "cost": 42431.02142382501,
+                    "adjustment": 0.10081134051928023
                 }
             },
             "year_3": {
@@ -314,13 +314,13 @@ id,asset_value,exposure_factor_min,exposure_factor_max,annual_rate_of_occurrence
                 2,
                 4
             ],
-            "total_rosi": 716.6354336615611,
+            "total_rosi": 717.5249857838003,
             "year_1": {
-                "ale_before": 509293.6007761477,
-                "ale_after": 407434.8806209182,
-                "control_cost": 10976.198210737957,
-                "total_cost": 10976.198210737957,
-                "rosi": 827.9963626711993
+                "ale_before": 450237.3955980828,
+                "ale_after": 360189.91647846624,
+                "control_cost": 10988.562225974487,
+                "total_cost": 10988.562225974487,
+                "rosi": 719.4655248596999
             },
             "year_2": {
                 [ ... ]
@@ -374,7 +374,8 @@ id,asset_value,exposure_factor_min,exposure_factor_max,annual_rate_of_occurrence
 - [x] Add Sobol sequence generation method
 - [x] Add RQMC method to risk analysis
 - [x] Modify Sobol sequence generation to work with RQMC
-- [ ] Add more flexibility to add or remove variability in the input data for RQMC
+- [x] Display natural language in RQMC rather than list of inputs
+- [x] Add more flexibility to add or remove variability in the input data for RQMC
 - [ ] Argparser input for risk_simulator.py and rqmc_sobol_sensitivity_analysis.py
 - [ ] Add more risk analysis scenarios (e.g. multiple controls)
 - [ ] Add more risk control analysis options (e.g. bayesian analysis)

@@ -658,6 +658,60 @@ def perform_sensitivity_analysis(
     return Si, problem
 
 
+def _is_fixed_range(value_range: list[float]) -> bool:
+    """Helper function to check if a range represents a fixed value.
+
+    Args:
+        value_range: List of two floats representing a range
+
+    Returns:
+        bool: True if the range represents a fixed value, False otherwise
+    """
+    return abs(value_range[0] - value_range[1]) < 1e-10
+
+
+def _format_scenario_text(
+    asset_value: float,
+    num_years: int,
+    ef_range: list[float],
+    aro_range: list[float],
+    cost_adjustment_range: list[float],
+    currency_symbol: str = "$",
+) -> str:
+    """Helper function to format the scenario text based on fixed/range values.
+
+    Args:
+        asset_value: The value of the asset at risk, expressed in monetary units
+        num_years: Number of years to simulate
+        ef_range: Exposure factor range
+        aro_range: Annual rate of occurrence range
+        cost_adjustment_range: Cost adjustment per year range
+        currency_symbol: Currency symbol to use in the statistics table. Default is CURRENCY_SYMBOL
+
+    Returns:
+        str: Formatted scenario text
+    """
+    # Format EF text
+    if _is_fixed_range(ef_range):
+        ef_text = f"You predict the exposure factor to be {ef_range[0]:.1f}"
+    else:
+        ef_text = f"You predict the exposure factor to be between {ef_range[0]:.1f} and {ef_range[1]:.1f}"
+
+    # Format ARO text
+    if _is_fixed_range(aro_range):
+        aro_text = f"You predict the annual rate of occurrence to be {aro_range[0]:.1f}"
+    else:
+        aro_text = f"You predict the annual rate of occurrence to be between {aro_range[0]:.1f} and {aro_range[1]:.1f}"
+
+    # Format cost adjustment text
+    if _is_fixed_range(cost_adjustment_range):
+        cost_text = f"You predict an annual (compounding) cost adjustment of {cost_adjustment_range[0] * 100:.1f}%"
+    else:
+        cost_text = f"You predict an annual (compounding) cost adjustment between {cost_adjustment_range[0] * 100:.1f}% and {cost_adjustment_range[1] * 100:.1f}%"
+
+    return f"""Scenario: You have an asset value of {currency_symbol}{asset_value:.2f} and want to implement {num_years} security controls over {num_years} years at a rate of one control per year. {ef_text}. {aro_text}. {cost_text}."""
+
+
 def plot_combined_analysis(
     Si: dict[str, float],
     problem: dict[str, list[str]],
@@ -860,8 +914,14 @@ def plot_combined_analysis(
     ax4.axis("off")
 
     # Define sections of text
-    # TODO: Modify the text if range is fixed value
-    scenario_text = f"""Scenario: You have an asset value of {currency_symbol}{exported_results['simulation_parameters']['asset_value']:.2f} and want to implement {final_year} security controls over {final_year} years at a rate of one control per year. You predict the exposure factor to be between {exported_results['simulation_parameters']['ef_range'][0]:.2f} and {exported_results['simulation_parameters']['ef_range'][1]:.2f} and the annual rate of occurrence to be between {exported_results['simulation_parameters']['aro_range'][0]:.2f} and {exported_results['simulation_parameters']['aro_range'][1]:.2f}. You predict the controls to have an annual (compounding) cost adjustment between {exported_results['simulation_parameters']['cost_adjustment_range'][0] * 100:.1f}% and {exported_results['simulation_parameters']['cost_adjustment_range'][1] * 100:.1f}%."""
+    scenario_text = _format_scenario_text(
+        exported_results["simulation_parameters"]["asset_value"],
+        final_year,
+        exported_results["simulation_parameters"]["ef_range"],
+        exported_results["simulation_parameters"]["aro_range"],
+        exported_results["simulation_parameters"]["cost_adjustment_range"],
+        currency_symbol,
+    )
 
     controls_text = f"""You are considering the following controls: {', '.join([
     f"Control {i} (yearly cost: {currency_symbol}{cost:.2f}, reduction: {reduction * 100:.1f}%)" 
