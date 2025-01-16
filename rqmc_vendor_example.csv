@@ -1,0 +1,2 @@
+id,asset_value,exposure_factor_min,exposure_factor_max,annual_rate_of_occurrence_min,annual_rate_of_occurrence_max,control_reduction_1_min,control_reduction_1_max,control_cost_1,control_reduction_2_min,control_reduction_2_max,control_cost_2,control_reduction_3_min,control_reduction_3_max,control_cost_3,control_reduction_4_min,control_reduction_4_max,control_cost_4
+1,500000,0.4,0.6,1.5,2.5,0.2,0.3,10000,0.35,0.65,30000,0.3,0.4,20000,0.45,0.7,35000
