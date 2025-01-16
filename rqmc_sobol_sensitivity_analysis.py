@@ -546,6 +546,7 @@ def evaluate_model(
     control_reductions: list[float],
     X: np.ndarray,
     problem: dict[str, int | list[str] | list[float]],
+    fixed_values: dict[str, float] = None,
 ) -> np.array:
     """Evaluate model for sensitivity analysis samples. The model calculates the ROSI for each sample. Each row in X corresponds to one set of parameter values, in the same order as problem["names"].
 
@@ -560,6 +561,7 @@ def evaluate_model(
         control_reductions: List of control reduction percentages, expressed as decimals
         X: Samples generated for sensitivity analysis
         problem: Problem dictionary for sensitivity analysis
+        fixed_values: Dictionary of fixed parameter values. Default is None
 
     Returns:
         np.array: ROSI values for each sample
@@ -574,10 +576,10 @@ def evaluate_model(
         # Map each parameter name to its value
         param_values = dict(zip(param_names, row))
 
-        # Retrieve parameters by name
-        ef = param_values.get("EF_variance", 0.5)
-        aro = param_values.get("ARO_variance", 2.0)
-        cost_adj = param_values.get("cost_variance", 0.0)
+        # Retrieve parameters by name, using fixed values if provided
+        ef = fixed_values.get("EF", param_values.get("EF"))
+        aro = fixed_values.get("ARO", param_values.get("ARO"))
+        cost_adj = fixed_values.get("cost_variance", param_values.get("cost_variance"))
 
         # Calculate base ALE
         ale = calculate_ale(asset_value, ef, aro)
@@ -620,12 +622,19 @@ def perform_sensitivity_analysis(
     """
     # Skip fixed parameters in problem definition
     problem_dict = {}
+    fixed_values = {}
     if ef_range[0] != ef_range[1]:
-        problem_dict["EF_variance"] = ef_range
+        problem_dict["EF"] = ef_range
+    else:
+        fixed_values["EF"] = ef_range[0]
     if aro_range[0] != aro_range[1]:
-        problem_dict["ARO_variance"] = aro_range
+        problem_dict["ARO"] = aro_range
+    else:
+        fixed_values["ARO"] = aro_range[0]
     if cost_adjustment_range[0] != cost_adjustment_range[1]:
         problem_dict["cost_variance"] = cost_adjustment_range
+    else:
+        fixed_values["cost_variance"] = cost_adjustment_range[0]
 
     # If everything is fixed, sensitivity analysis is not relevant. Return empty results in that case
     if not problem_dict:
@@ -641,7 +650,7 @@ def perform_sensitivity_analysis(
 
     # Run model evaluations
     Y = evaluate_model(
-        asset_value, control_costs, control_reductions, param_values, problem
+        asset_value, control_costs, control_reductions, param_values, problem, fixed_values
     )
 
     # Create a copy of the problem dictionary to convert to numpy arrays
