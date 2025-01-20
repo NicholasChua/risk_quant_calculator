@@ -206,7 +206,7 @@ def perform_sensitivity_analysis(
     control_costs: list[float],
     control_reduction_ranges: list[list[float]],
     num_samples: int = NUM_SAMPLES,
-) -> tuple[dict[str, float], dict[str, list[str]]]:
+) -> tuple[dict[str, dict[str, float]], dict[str, list[str]]]:
     """Perform Sobol sensitivity analysis on the model using the specified number of samples.
 
     Args:
@@ -218,17 +218,28 @@ def perform_sensitivity_analysis(
         num_samples: Number of samples to generate for sensitivity analysis. Default is NUM_SAMPLES
 
     Returns:
-        tuple[dict[str, float], dict[str, list[str]]]: Sensitivity analysis results and problem definition
+        tuple[dict[str, dict[str, float]], dict[str, list[str]]]: Sensitivity analysis results and problem definition
     """
+    # Ensure control_reduction_ranges is a list of lists
+    if not all(isinstance(control_range, list) and len(control_range) == 2 for control_range in control_reduction_ranges):
+        raise ValueError("control_reduction_ranges must be a list of lists, each containing two floats")
+
     # Skip fixed parameters in problem definition
     problem_dict = {}
+    fixed_values = {}
     if ef_range[0] != ef_range[1]:
         problem_dict["EF"] = ef_range
+    else:
+        fixed_values["EF"] = ef_range[0]
     if aro_range[0] != aro_range[1]:
         problem_dict["ARO"] = aro_range
+    else:
+        fixed_values["ARO"] = aro_range[0]
     for i, control_range in enumerate(control_reduction_ranges):
         if control_range[0] != control_range[1]:
             problem_dict[f"control_reduction_{i+1}"] = control_range
+        else:
+            fixed_values[f"control_reduction_{i+1}"] = control_range[0]
 
     # If everything is fixed, sensitivity analysis is not relevant. Return empty results in that case
     if not problem_dict:
@@ -256,7 +267,18 @@ def perform_sensitivity_analysis(
         problem_array, Y, calc_second_order=False, seed=RANDOM_SEED
     )
 
-    return Si, problem
+    # Convert sensitivity analysis results to a dictionary of dictionaries
+    sensitivity_analysis = {
+        name: {
+            "S1": Si["S1"][i],
+            "S1_conf": Si["S1_conf"][i],
+            "ST": Si["ST"][i],
+            "ST_conf": Si["ST_conf"][i],
+        }
+        for i, name in enumerate(problem["names"])
+    }
+
+    return sensitivity_analysis, problem
 
 
 def simulate_vendor_assessment_decision(

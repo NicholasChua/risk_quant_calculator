@@ -605,7 +605,7 @@ def perform_sensitivity_analysis(
     control_costs: list[float],
     control_reductions: list[float],
     num_samples: int = NUM_SAMPLES,
-) -> tuple[dict[str, float], dict[str, list[str]]]:
+) -> tuple[dict[str, dict[str, float]], dict[str, list[str]]]:
     """Perform Sobol sensitivity analysis on the model using the specified number of samples.
 
     Args:
@@ -618,7 +618,7 @@ def perform_sensitivity_analysis(
         num_samples: Number of samples to generate for sensitivity analysis. Default is NUM_SAMPLES
 
     Returns:
-        tuple[dict[str, float], dict[str, list[str]]]: Sensitivity analysis results and problem definition
+        tuple[dict[str, dict[str, float]], dict[str, list[str]]]: Sensitivity analysis results and problem definition
     """
     # Skip fixed parameters in problem definition
     problem_dict = {}
@@ -638,7 +638,7 @@ def perform_sensitivity_analysis(
 
     # If everything is fixed, sensitivity analysis is not relevant. Return empty results in that case
     if not problem_dict:
-        return {}, {"names": [], "num_vars": 0}
+        return {}, {}
 
     # Setup sensitivity analysis problem
     problem = setup_sensitivity_problem(**problem_dict)
@@ -664,7 +664,18 @@ def perform_sensitivity_analysis(
         problem_array, Y, calc_second_order=False, seed=RANDOM_SEED
     )
 
-    return Si, problem
+    # Convert sensitivity analysis results to a dictionary of dictionaries
+    sensitivity_analysis = {
+        name: {
+            "S1": Si["S1"][i],
+            "S1_conf": Si["S1_conf"][i],
+            "ST": Si["ST"][i],
+            "ST_conf": Si["ST_conf"][i],
+        }
+        for i, name in enumerate(problem["names"])
+    }
+
+    return sensitivity_analysis, problem
 
 
 def _is_fixed_range(value_range: list[float]) -> bool:
@@ -722,7 +733,7 @@ def _format_scenario_text(
 
 
 def plot_combined_analysis(
-    Si: dict[str, float],
+    sensitivity_analysis: dict[str, dict[str, float]],
     problem: dict[str, list[str]],
     exported_results: dict[str, any],
     output_file: str,
@@ -737,7 +748,7 @@ def plot_combined_analysis(
         - Bottom Right - Statistics: Table showing the input parameters and simulation results
 
     Args:
-        Si: Sensitivity analysis results
+        sensitivity_analysis: Sensitivity analysis results
         problem: Problem definition used in the sensitivity analysis
         exported_results: Exported results from the simulation
         output_file: Output file to save the plot
@@ -771,9 +782,9 @@ def plot_combined_analysis(
         # Positions of the bars on the x-axis
         indices = np.arange(len(problem["names"]))
 
-        # Convert sensitivity indices to percentages
-        S1_percent = [s1 * 100 for s1 in Si["S1"]]
-        ST_percent = [st * 100 for st in Si["ST"]]
+        # Extract sensitivity indices
+        S1_percent = [sensitivity_analysis[name]["S1"] * 100 for name in problem["names"]]
+        ST_percent = [sensitivity_analysis[name]["ST"] * 100 for name in problem["names"]]
 
         # Plot S1 and ST bars next to each other
         ax1.bar(
