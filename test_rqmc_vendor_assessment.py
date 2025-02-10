@@ -1,12 +1,13 @@
 import csv
 import itertools
 import json
-from scipy.stats import beta
+from scipy.stats import gaussian_kde
 import numpy as np
 from SALib.sample import sobol as sobol_sample
 from SALib.analyze import sobol as sobol_analyze
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
 
-from risk_simulator import get_beta_parameters_for_kurtosis
 import rqmc_sobol_sensitivity_analysis as rqmc
 
 
@@ -199,6 +200,31 @@ def evaluate_model(
     return np.array(Y)
 
 
+def calculate_mode(values):
+    """Calculate mode using kernel density estimation and its percentage in the distribution
+
+    Args:
+        values: Array of values to analyze
+
+    Returns:
+        tuple: (mode value, percentage of values within 1% of mode)
+    """
+    if len(values) < 2:
+        return (values[0], 100.0) if len(values) == 1 else (None, None)
+
+    kde = gaussian_kde(values)
+    grid = np.linspace(min(values), max(values), 100)
+    mode_idx = np.argmax(kde(grid))
+    mode = grid[mode_idx]
+
+    # Calculate percentage of values within 1% of mode
+    mode_range = 0.01 * mode
+    count = np.sum((values >= mode - mode_range) & (values <= mode + mode_range))
+    percentage = (count / len(values)) * 100
+
+    return mode, percentage
+
+
 def perform_sensitivity_analysis(
     asset_value: float,
     ef_range: list[float],
@@ -221,8 +247,13 @@ def perform_sensitivity_analysis(
         tuple[dict[str, dict[str, float]], dict[str, list[str]]]: Sensitivity analysis results and problem definition
     """
     # Ensure control_reduction_ranges is a list of lists
-    if not all(isinstance(control_range, list) and len(control_range) == 2 for control_range in control_reduction_ranges):
-        raise ValueError("control_reduction_ranges must be a list of lists, each containing two floats")
+    if not all(
+        isinstance(control_range, list) and len(control_range) == 2
+        for control_range in control_reduction_ranges
+    ):
+        raise ValueError(
+            "control_reduction_ranges must be a list of lists, each containing two floats"
+        )
 
     # Skip fixed parameters in problem definition
     problem_dict = {}
@@ -281,6 +312,201 @@ def perform_sensitivity_analysis(
     return sensitivity_analysis, problem
 
 
+def plot_vendor_analysis(
+    sensitivity_analysis: dict[str, dict[str, float]],
+    problem: dict[str, list[str]],
+    vendor_statistics: list[dict[str, float]],
+    output_file: str,
+    currency_symbol: str = "$",
+) -> None:
+    """Generates plots for vendor assessment, including sensitivity analysis and vendor comparison.
+
+    Args:
+        sensitivity_analysis: Sensitivity analysis results
+        problem: Problem definition used in the sensitivity analysis
+        vendor_statistics: List of vendor statistics
+        output_file: Output file to save the plot
+        currency_symbol: Currency symbol to use in the statistics table. Default is CURRENCY_SYMBOL
+    """
+    # Set figure size and create a grid layout
+    fig = plt.figure(figsize=(19.2, 10.8))
+    gs = GridSpec(2, 2, figure=fig)
+
+    # Sensitivity Analysis Plot (Top Left)
+    ax1 = fig.add_subplot(gs[0, 0])
+
+    # Only draw if there are at least two varying parameters
+    if len(problem["names"]) < 2:
+        ax1.axis("off")
+        ax1.text(
+            0.5,
+            0.5,
+            "Sensitivity Analysis not applicable",
+            ha="center",
+            va="center",
+            fontsize=12,
+        )
+    else:
+        # Set bar width
+        bar_width = 0.35
+
+        # Positions of the bars on the x-axis
+        indices = np.arange(len(problem["names"]))
+
+        # Extract sensitivity indices
+        S1_percent = [
+            sensitivity_analysis[name]["S1"] * 100 for name in problem["names"]
+        ]
+        ST_percent = [
+            sensitivity_analysis[name]["ST"] * 100 for name in problem["names"]
+        ]
+
+        # Plot S1 and ST bars next to each other
+        ax1.bar(
+            indices - bar_width / 2,
+            S1_percent,
+            bar_width,
+            label="First Order",
+            color="blue",
+        )
+        ax1.bar(
+            indices + bar_width / 2,
+            ST_percent,
+            bar_width,
+            label="Total Order",
+            color="orange",
+            alpha=0.5,
+        )
+
+        # Add annotations to the bars
+        for i, (s1, st) in enumerate(zip(S1_percent, ST_percent)):
+            ax1.text(i - bar_width / 2, s1, f"{s1:.2f}%", ha="center", va="bottom")
+            ax1.text(i + bar_width / 2, st, f"{st:.2f}%", ha="center", va="bottom")
+
+        ax1.set_xlabel("Parameters")
+        ax1.set_ylabel("Sensitivity Index (%)")
+        ax1.set_xticks(indices)
+        ax1.set_xticklabels(
+            [
+                name.replace("control_reduction_", "control_")
+                for name in problem["names"]
+            ]
+        )
+        ax1.set_xticklabels(
+            [
+                s.title() if s.startswith("control_") else s
+                for s in [
+                    name.replace("control_reduction_", "Control ")
+                    for name in problem["names"]
+                ]
+            ]
+        )
+        ax1.legend()
+        ax1.set_title("Parameter Sensitivity Analysis")
+
+        # Set Y axis limit to the next value(s) up after the highest value to prevent text overlap with top of the plot
+        max_value_sensitivity = max(max(S1_percent), max(ST_percent))
+        base = int(max_value_sensitivity / 10)
+        remainder = max_value_sensitivity % 10
+
+        # If remainder is >= 9, add 2 steps, otherwise add 1 step
+        if remainder >= 9:
+            y_max = (base + 2) * 10
+        else:
+            y_max = (base + 1) * 10
+
+        ax1.set_ylim(0, y_max)
+
+    # Scatter Plot (Top Right)
+    ax2 = fig.add_subplot(gs[0, 1])
+    costs = [vendor["control_cost"] for vendor in vendor_statistics]
+    ale_reduction_percentages = [
+        vendor["mean_ale_reduction"] * 100
+        for vendor in vendor_statistics
+    ]
+
+    # Plot vendors and add ID annotations
+    ax2.scatter(costs, ale_reduction_percentages, label="Vendors")
+    for vendor in vendor_statistics:
+        ax2.annotate(
+            f"{vendor['vendor_id']}", 
+            (vendor["control_cost"], vendor["mean_ale_reduction"] * 100),
+            xytext=(5, 5),
+            textcoords='offset points',
+            fontsize=8
+        )
+    # Highlight best and most effective vendors
+    best_vendor = max(vendor_statistics, key=lambda x: x["mean_rosi"])
+    most_effective_vendor = min(vendor_statistics, key=lambda x: x["mean_ale_after"])
+
+    # Calculate ALE reduction percentage for best and most effective vendors
+    best_vendor_ale_reduction = best_vendor["mean_ale_reduction"] * 100
+    most_effective_vendor_ale_reduction = most_effective_vendor["mean_ale_reduction"] * 100
+
+    ax2.scatter(
+        best_vendor["control_cost"],
+        best_vendor_ale_reduction,
+        color="red",
+        label="Best Vendor (ROSI)",
+        zorder=5,
+    )
+    ax2.scatter(
+        most_effective_vendor["control_cost"],
+        most_effective_vendor_ale_reduction,
+        color="green",
+        label="Most Effective (ALE Reduction)",
+        zorder=5,
+    )
+
+    ax2.set_xlabel(f"Control Cost ({currency_symbol})")
+    ax2.set_ylabel("Mean ALE Reduction (%)")
+    ax2.set_title("Vendor Comparison: Cost vs. ALE Reduction")
+    ax2.legend()
+    ax2.grid(True)
+
+    # Set y axis limit to the next value up after the highest value
+    y_max = (int(max(ale_reduction_percentages) / 10) + 1) * 10
+    ax2.set_ylim(0, y_max)
+
+    # TODO: Present this better
+    # Statistics (Bottom)
+    ax3 = fig.add_subplot(gs[1, :])  # Span both columns
+    ax3.axis("off")
+
+    # Prepare data for the text
+    best_vendor_id = best_vendor["vendor_id"]
+    best_vendor_rosi = f"{best_vendor['mean_rosi']:.2f}%"
+    most_effective_vendor_id = most_effective_vendor["vendor_id"]
+    most_effective_vendor_ale_reduction = (
+        f"{most_effective_vendor_ale_reduction:.2f}%"
+    )
+
+    # Construct the text
+    full_text = f"""
+    Best Vendor: {best_vendor_id}
+    Best Vendor ROSI: {best_vendor_rosi}
+    Most Effective Vendor: {most_effective_vendor_id}
+    Most Effective Vendor ALE Reduction: {most_effective_vendor_ale_reduction}
+    """
+
+    # Position text with proper alignment and smaller font
+    ax3.text(
+        0.05,
+        0.95,
+        full_text,
+        ha="left",
+        va="top",
+        fontsize=10,
+        transform=ax3.transAxes,
+        linespacing=1.5,
+        bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=10),
+    )
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.savefig(output_file)
+    plt.close()
+
+
 def simulate_vendor_assessment_decision(
     asset_value: float,
     ef_range: list[float],
@@ -289,9 +515,30 @@ def simulate_vendor_assessment_decision(
     control_costs: list[float],
     num_vendors: int,
     output_json_file: str = None,
+    output_png_file: str = None,
     num_samples: int = NUM_SAMPLES,
     kurtosis: float = KURTOSIS,
 ) -> None:
+    """Simulate vendor assessment decision based on the input parameters and write the results to a JSON file.
+
+    Args:
+        asset_value: The value of the asset at risk, expressed in monetary units
+        ef_range: Exposure factor range
+        aro_range: Annual rate of occurrence range
+        control_reduction_ranges: List of control reduction ranges for each vendor
+        control_costs: List of control costs for each vendor, expressed in monetary units
+        num_vendors: Number of vendors
+        output_json_file: Output JSON file to save the results. Default is None
+        output_png_file: Output PNG file to save the plot. Default is None
+        num_samples: Number of samples to generate for the simulation. Default is NUM_SAMPLES
+        kurtosis: Kurtosis value for the exposure factor distribution. Default is KURTOSIS
+
+    Returns:
+        None
+
+    Raises:
+        ValueError: If control_reduction_ranges is not a list of lists
+    """
     # Initialize results dictionary
     results = {
         "input_parameters": {
@@ -458,17 +705,25 @@ def simulate_vendor_assessment_decision(
             "control_reduction_ranges": control_reduction_ranges[vendor],
         }
 
-        # Calculate mean, standard deviation, and 95% confidence interval for ALE before controls
+        # Calculate stats for ALE before controls
         ale_before_values = np.array(ale_before_values)
         vendor_stat["mean_ale_before"] = np.mean(ale_before_values)
+        vendor_stat["median_ale_before"] = np.median(ale_before_values)
+        vendor_stat["mode_ale_before"], vendor_stat["mode_ale_before_percentage"] = calculate_mode(ale_before_values)
         vendor_stat["std_dev_ale_before"] = np.std(ale_before_values)
         vendor_stat["ci_ale_before"] = np.percentile(ale_before_values, [2.5, 97.5])
 
-        # Calculate mean, standard deviation, and 95% confidence interval for ALE after controls
+        # Calculate stats for ALE after controls. Also add percentage reduction
         ale_after_values = np.array(ale_after_values)
         vendor_stat["mean_ale_after"] = np.mean(ale_after_values)
+        vendor_stat["median_ale_after"] = np.median(ale_after_values)
+        vendor_stat["mode_ale_after"], vendor_stat["mode_ale_after_percentage"] = calculate_mode(ale_after_values)
         vendor_stat["std_dev_ale_after"] = np.std(ale_after_values)
         vendor_stat["ci_ale_after"] = np.percentile(ale_after_values, [2.5, 97.5])
+        vendor_stat["mean_ale_reduction"] = (
+            (vendor_stat["mean_ale_before"] - vendor_stat["mean_ale_after"])
+            / vendor_stat["mean_ale_before"]
+        )
 
         # Calculate mean, standard deviation, and 95% confidence interval for ROSI
         rosi_values = np.array(rosi_values)
@@ -508,7 +763,14 @@ def simulate_vendor_assessment_decision(
         with open(output_json_file, "w") as file:
             json.dump(serialized_results, file, indent=4)
 
-    # TODO: Plot
+    # Plot vendor analysis if output PNG file is specified
+    if output_png_file:
+        plot_vendor_analysis(
+            sensitivity_results,
+            problem,
+            results["vendor_statistics"],
+            output_png_file,
+        )
 
 
 def main():
@@ -522,6 +784,7 @@ def main():
             item["control_costs"],
             item["num_vendors"],
             output_json_file=f"{item['id']}_rqmc_vendor_assessment.json",
+            output_png_file=f"{item['id']}_rqmc_vendor_assessment.png",
         )
 
 
