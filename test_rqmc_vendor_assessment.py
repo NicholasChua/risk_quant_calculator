@@ -132,6 +132,30 @@ def load_csv_data(
     return result
 
 
+def _find_first_nonzero_percentile(
+    values: np.ndarray, precision_dp: int = 2
+) -> tuple[float, float]:
+    """Find the first non-zero percentile and its value. Default precision is 0.01% (2 decimal places).
+
+    Args:
+        values: Array of values to analyze
+        precision_dp: Number of decimal places for percentile precision. Default is 2 (0.01%)
+
+    Returns:
+        tuple: (percentile, value) where percentile is the first percentile with non-zero value
+    """
+    # Calculate number of points needed for desired precision
+    num_points = 100 * (10**precision_dp)
+    # Generate percentiles with specified precision
+    percentiles = np.linspace(1 / (10**precision_dp), 100, num=num_points)
+
+    for p in percentiles:
+        value = np.percentile(values, p)
+        if value > 0:
+            return p, value
+    return None, None
+
+
 def simulate_control_effectiveness_sobol(
     sobol_samples: np.ndarray, ce_range: list[float]
 ) -> np.ndarray:
@@ -315,7 +339,7 @@ def perform_sensitivity_analysis(
 def plot_vendor_analysis(
     sensitivity_analysis: dict[str, dict[str, float]],
     problem: dict[str, list[str]],
-    vendor_statistics: list[dict[str, float]],
+    vendor_statistics: list[dict[str, float | int | list[float]]],
     output_file: str,
     currency_symbol: str = "$",
 ) -> None:
@@ -421,42 +445,52 @@ def plot_vendor_analysis(
     ax2 = fig.add_subplot(gs[0, 1])
     costs = [vendor["control_cost"] for vendor in vendor_statistics]
     ale_reduction_percentages = [
-        vendor["mean_ale_reduction"] * 100
-        for vendor in vendor_statistics
+        vendor["mean_ale_reduction"] * 100 for vendor in vendor_statistics
     ]
 
     # Plot vendors and add ID annotations
     ax2.scatter(costs, ale_reduction_percentages, label="Vendors")
     for vendor in vendor_statistics:
         ax2.annotate(
-            f"{vendor['vendor_id']}", 
+            f"{vendor['vendor_id']}",
             (vendor["control_cost"], vendor["mean_ale_reduction"] * 100),
             xytext=(5, 5),
-            textcoords='offset points',
-            fontsize=8
+            textcoords="offset points",
+            fontsize=8,
         )
-    # Highlight best and most effective vendors
+    # Find best and most effective vendors
     best_vendor = max(vendor_statistics, key=lambda x: x["mean_rosi"])
     most_effective_vendor = min(vendor_statistics, key=lambda x: x["mean_ale_after"])
 
-    # Calculate ALE reduction percentage for best and most effective vendors
-    best_vendor_ale_reduction = best_vendor["mean_ale_reduction"] * 100
-    most_effective_vendor_ale_reduction = most_effective_vendor["mean_ale_reduction"] * 100
+    # Check if best and most effective are the same vendor
+    is_same_vendor = best_vendor["vendor_id"] == most_effective_vendor["vendor_id"]
 
-    ax2.scatter(
-        best_vendor["control_cost"],
-        best_vendor_ale_reduction,
-        color="red",
-        label="Best Vendor (ROSI)",
-        zorder=5,
-    )
-    ax2.scatter(
-        most_effective_vendor["control_cost"],
-        most_effective_vendor_ale_reduction,
-        color="green",
-        label="Most Effective (ALE Reduction)",
-        zorder=5,
-    )
+    # Highlight best and most effective vendors
+    if is_same_vendor:
+        # Plot combined point
+        ax2.scatter(
+            best_vendor["control_cost"],
+            best_vendor["mean_ale_reduction"] * 100,
+            color="purple",
+            label="Best ROSI & Most Effective",
+            zorder=6,
+        )
+    else:
+        # Plot two separate points
+        ax2.scatter(
+            best_vendor["control_cost"],
+            best_vendor["mean_ale_reduction"] * 100,
+            color="red",
+            label="Best Vendor (ROSI)",
+            zorder=5,
+        )
+        ax2.scatter(
+            most_effective_vendor["control_cost"],
+            most_effective_vendor["mean_ale_reduction"] * 100,
+            color="green",
+            label="Most Effective (ALE Reduction)",
+            zorder=5,
+        )
 
     ax2.set_xlabel(f"Control Cost ({currency_symbol})")
     ax2.set_ylabel("Mean ALE Reduction (%)")
@@ -468,39 +502,104 @@ def plot_vendor_analysis(
     y_max = (int(max(ale_reduction_percentages) / 10) + 1) * 10
     ax2.set_ylim(0, y_max)
 
-    # TODO: Present this better
     # Statistics (Bottom)
     ax3 = fig.add_subplot(gs[1, :])  # Span both columns
     ax3.axis("off")
 
-    # Prepare data for the text
-    best_vendor_id = best_vendor["vendor_id"]
-    best_vendor_rosi = f"{best_vendor['mean_rosi']:.2f}%"
-    most_effective_vendor_id = most_effective_vendor["vendor_id"]
-    most_effective_vendor_ale_reduction = (
-        f"{most_effective_vendor_ale_reduction:.2f}%"
-    )
+    # Prepare data for both vendors
+    best_stats = {
+        "id": best_vendor["vendor_id"],
+        "rosi_mean": best_vendor["mean_rosi"],
+        "rosi_median": best_vendor["median_rosi"],
+        "rosi_mode": best_vendor["mode_rosi"],
+        "ale_reduction": best_vendor["mean_ale_reduction"],
+        "ale_after_mean": best_vendor["mean_ale_after"],
+        "ale_after_median": best_vendor["median_ale_after"],
+        "ale_after_mode": best_vendor["mode_ale_after"],
+    }
 
-    # Construct the text
-    full_text = f"""
-    Best Vendor: {best_vendor_id}
-    Best Vendor ROSI: {best_vendor_rosi}
-    Most Effective Vendor: {most_effective_vendor_id}
-    Most Effective Vendor ALE Reduction: {most_effective_vendor_ale_reduction}
-    """
+    most_effective_stats = {
+        "id": most_effective_vendor["vendor_id"],
+        "rosi_mean": most_effective_vendor["mean_rosi"],
+        "rosi_median": most_effective_vendor["median_rosi"],
+        "rosi_mode": most_effective_vendor["mode_rosi"],
+        "ale_reduction": most_effective_vendor["mean_ale_reduction"],
+        "ale_after_mean": most_effective_vendor["mean_ale_after"],
+        "ale_after_median": most_effective_vendor["median_ale_after"],
+        "ale_after_mode": most_effective_vendor["mode_ale_after"],
+    }
 
-    # Position text with proper alignment and smaller font
-    ax3.text(
-        0.05,
-        0.95,
-        full_text,
-        ha="left",
-        va="top",
-        fontsize=10,
-        transform=ax3.transAxes,
-        linespacing=1.5,
-        bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=10),
-    )
+    if is_same_vendor:
+        # Single column format for same vendor
+        full_text = f"""
+        Best ROSI & Most Effective Vendor (ID: {best_stats['id']})
+        ------------------------------------------
+        ROSI Statistics:
+          Mean:   {best_stats['rosi_mean']:.2f}%
+          Median: {best_stats['rosi_median']:.2f}%
+          Mode:   {best_stats['rosi_mode']:.2f}%
+        
+        ALE Reduction: {best_stats['ale_reduction'] * 100:.2f}%
+        ALE After Statistics:
+          Mean:   {currency_symbol}{best_stats['ale_after_mean']:.2f}
+          Median: {currency_symbol}{best_stats['ale_after_median']:.2f}
+          Mode:   {currency_symbol}{best_stats['ale_after_mode']:.2f}
+        """
+    else:
+        # Two column format for different vendors
+        best_text = f"""
+        Best ROSI Vendor (ID: {best_stats['id']})
+        ------------------------------------------
+        ROSI Statistics:
+          Mean:   {best_stats['rosi_mean']:.2f}%
+          Median: {best_stats['rosi_median']:.2f}%
+          Mode:   {best_stats['rosi_mode']:.2f}%
+        
+        ALE Reduction: {best_stats['ale_reduction'] * 100:.2f}%
+        ALE After Statistics:
+          Mean:   {currency_symbol}{best_stats['ale_after_mean']:.2f}
+          Median: {currency_symbol}{best_stats['ale_after_median']:.2f}
+          Mode:   {currency_symbol}{best_stats['ale_after_mode']:.2f}
+        """
+
+        effective_text = f"""
+        Most Effective Vendor (ID: {most_effective_stats['id']})
+        ------------------------------------------
+        ROSI Statistics:
+          Mean:   {most_effective_stats['rosi_mean']:.2f}%
+          Median: {most_effective_stats['rosi_median']:.2f}%
+          Mode:   {most_effective_stats['rosi_mode']:.2f}%
+        
+        ALE Reduction: {most_effective_stats['ale_reduction'] * 100:.2f}%
+        ALE After Statistics:
+          Mean:   {currency_symbol}{most_effective_stats['ale_after_mean']:.2f}
+          Median: {currency_symbol}{most_effective_stats['ale_after_median']:.2f}
+          Mode:   {currency_symbol}{most_effective_stats['ale_after_mode']:.2f}
+        """
+
+        # Position text in two columns
+        ax3.text(
+            0.25,  # Left column
+            0.95,
+            best_text,
+            ha="center",
+            va="top",
+            fontsize=10,
+            transform=ax3.transAxes,
+            linespacing=1.5,
+            bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=10),
+        )
+        ax3.text(
+            0.75,  # Right column
+            0.95,
+            effective_text,
+            ha="center",
+            va="top",
+            fontsize=10,
+            transform=ax3.transAxes,
+            linespacing=1.5,
+            bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=10),
+        )
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.savefig(output_file)
@@ -705,44 +804,70 @@ def simulate_vendor_assessment_decision(
             "control_reduction_ranges": control_reduction_ranges[vendor],
         }
 
+        percentiles = [1, 2.5, 5, 10, 25, 75, 90, 95, 97.5, 99]
+
         # Calculate stats for ALE before controls
         ale_before_values = np.array(ale_before_values)
         vendor_stat["mean_ale_before"] = np.mean(ale_before_values)
         vendor_stat["median_ale_before"] = np.median(ale_before_values)
-        vendor_stat["mode_ale_before"], vendor_stat["mode_ale_before_percentage"] = calculate_mode(ale_before_values)
+        vendor_stat["mode_ale_before"], vendor_stat["mode_ale_before_percentage"] = (
+            calculate_mode(ale_before_values)
+        )
         vendor_stat["std_dev_ale_before"] = np.std(ale_before_values)
-        vendor_stat["ci_ale_before"] = np.percentile(ale_before_values, [2.5, 97.5])
+        for p in percentiles:
+            vendor_stat[f"ale_before_percentile_{p}"] = np.percentile(
+                ale_before_values, p
+            )
 
         # Calculate stats for ALE after controls. Also add percentage reduction
         ale_after_values = np.array(ale_after_values)
         vendor_stat["mean_ale_after"] = np.mean(ale_after_values)
         vendor_stat["median_ale_after"] = np.median(ale_after_values)
-        vendor_stat["mode_ale_after"], vendor_stat["mode_ale_after_percentage"] = calculate_mode(ale_after_values)
-        vendor_stat["std_dev_ale_after"] = np.std(ale_after_values)
-        vendor_stat["ci_ale_after"] = np.percentile(ale_after_values, [2.5, 97.5])
-        vendor_stat["mean_ale_reduction"] = (
-            (vendor_stat["mean_ale_before"] - vendor_stat["mean_ale_after"])
-            / vendor_stat["mean_ale_before"]
+        vendor_stat["mode_ale_after"], vendor_stat["mode_ale_after_percentage"] = (
+            calculate_mode(ale_after_values)
         )
+        vendor_stat["std_dev_ale_after"] = np.std(ale_after_values)
+        vendor_stat["mean_ale_reduction"] = (
+            vendor_stat["mean_ale_before"] - vendor_stat["mean_ale_after"]
+        ) / vendor_stat["mean_ale_before"]
+        (
+            vendor_stat["first_nonzero_percentile_ale_after"],
+            vendor_stat["first_nonzero_value_ale_after"],
+        ) = _find_first_nonzero_percentile(ale_after_values)
+        for p in percentiles:
+            vendor_stat[f"ale_after_percentile_{p}"] = np.percentile(
+                ale_after_values, p
+            )
 
-        # Calculate mean, standard deviation, and 95% confidence interval for ROSI
+        # Calculate stats for ROSI
         rosi_values = np.array(rosi_values)
         vendor_stat["mean_rosi"] = np.mean(rosi_values)
+        vendor_stat["median_rosi"] = np.median(rosi_values)
+        vendor_stat["mode_rosi"], vendor_stat["mode_rosi_percentage"] = calculate_mode(
+            rosi_values
+        )
         vendor_stat["std_dev_rosi"] = np.std(rosi_values)
-        vendor_stat["ci_rosi"] = np.percentile(rosi_values, [2.5, 97.5])
+        for p in percentiles:
+            vendor_stat[f"rosi_percentile_{p}"] = np.percentile(rosi_values, p)
 
         # Append vendor statistics to results
         results["vendor_statistics"].append(vendor_stat)
 
-    # Determine best vendor based on mean ROSI
-    best_vendor = max(results["vendor_statistics"], key=lambda x: x["mean_rosi"])
-    results["best_vendor"] = best_vendor
-
-    # Determine most effective vendor based on mean ALE reduction
-    most_effective_vendor = min(
-        results["vendor_statistics"], key=lambda x: x["mean_ale_after"]
-    )
-    results["most_effective_vendor"] = most_effective_vendor
+    # Determine order of vendors based on mean ROSI/ALE reduction descending and return their IDs
+    results["best_vendor"] = [
+        vendor["vendor_id"]
+        for vendor in sorted(
+            results["vendor_statistics"], key=lambda x: x["mean_rosi"], reverse=True
+        )
+    ]
+    results["most_effective_vendor"] = [
+        vendor["vendor_id"]
+        for vendor in sorted(
+            results["vendor_statistics"],
+            key=lambda x: x["mean_ale_after"],
+            reverse=False,
+        )
+    ]
 
     # Perform sensitivity analysis
     sensitivity_results, problem = perform_sensitivity_analysis(
