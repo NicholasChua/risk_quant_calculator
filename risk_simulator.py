@@ -746,6 +746,7 @@ def plot_risk_calculation_before_after(
             "percentile_25": float(calc_stats["25th Percentile"]),
             "percentile_75": float(calc_stats["75th Percentile"]),
             "percentile_90": float(calc_stats["90th Percentile"]),
+            "percentile_95": float(calc_stats["95th Percentile"]),
             "percentile_97.5": float(calc_stats["97.5th Percentile"]),
             "percentile_99": float(calc_stats["99th Percentile"]),
         },
@@ -762,6 +763,7 @@ def plot_risk_calculation_before_after(
             "percentile_25": float(calc_adjusted_stats["25th Percentile"]),
             "percentile_75": float(calc_adjusted_stats["75th Percentile"]),
             "percentile_90": float(calc_adjusted_stats["90th Percentile"]),
+            "percentile_95": float(calc_adjusted_stats["95th Percentile"]),
             "percentile_97.5": float(calc_adjusted_stats["97.5th Percentile"]),
             "percentile_99": float(calc_adjusted_stats["99th Percentile"]),
             "first_nonzero_percentile": float(

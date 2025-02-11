@@ -141,6 +141,7 @@ id,asset_value,exposure_factor,annual_rate_of_occurrence,percentage_reduction,co
         "percentile_25": 6128.444225401311,
         "percentile_75": 34097.53285472107,
         "percentile_90": 38778.53017793577,
+        "percentile_95": 39463.01366978063,
         "percentile_97.5": 39643.60209467536,
         "percentile_99": 39695.760656933606
     },
@@ -157,6 +158,7 @@ id,asset_value,exposure_factor,annual_rate_of_occurrence,percentage_reduction,co
         "percentile_25": 2796.4990299430856,
         "percentile_75": 17222.65943226759,
         "percentile_90": 19754.30208951885,
+        "percentile_95": 20132.155854965924,
         "percentile_97.5": 20221.86425518434,
         "percentile_99": 20248.917917030638,
         "first_nonzero_percentile": 0.04,
