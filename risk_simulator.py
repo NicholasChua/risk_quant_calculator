@@ -212,8 +212,8 @@ def _validate_simulation_params(**kwargs) -> None:
         - annual_rate_of_occurrence: Must be positive
         - reduction_percentage: Must be 99 or less
         - cost_of_controls: Must be positive
-        - plot: Must be boolean
-        - output_file: Must be .png or .json or None
+        - output_json_file: Must be .json or None
+        - output_png_file: Must be .png or None
         - monte_carlo_seed: Must be positive
         - num_simulations: Must be positive
         - kurtosis: Must be positive
@@ -234,10 +234,13 @@ def _validate_simulation_params(**kwargs) -> None:
             "must be 99 or less",
         ),  # Allow negative values to model increase in risk, disallow 100 as it is risk avoidance and not risk reduction
         "cost_of_controls": (lambda x: x >= 0, "must be a positive value"),
-        "plot": (lambda x: isinstance(x, bool), "must be a boolean value"),
-        "output_file": (
-            lambda x: x is None or x.endswith(".json") or x.endswith(".png"),
-            "must be .json, .png, or None",
+        "output_json_file": (
+            lambda x: x is None or x.endswith(".json"),
+            "must be .json or None",
+        ),
+        "output_png_file": (
+            lambda x: x is None or x.endswith(".png"),
+            "must be .png or None",
         ),
         "monte_carlo_seed": (lambda x: x > 0, "must be a positive value"),
         "num_simulations": (lambda x: x > 0, "must be a positive value"),
@@ -591,14 +594,14 @@ def plot_risk_calculation_before_after(
     annual_rate_of_occurrence: float,
     reduction_percentage: float,
     cost_of_controls: float,
-    plot: bool = True,
-    output_file: str | None = None,
+    output_json_file: str | None = None,
+    output_png_file: str | None = None,
     monte_carlo_seed: int = MONTE_CARLO_SEED,
     num_simulations: int = NUM_SIMULATIONS,
     kurtosis: int = KURTOSIS,
     currency_symbol: str = CURRENCY_SYMBOL,
     simulation_method: int = 0,
-) -> None | dict:
+) -> None:
     """Estimate the mean loss and the effectiveness of risk controls using Monte Carlo or Markov Chain Monte Carlo (MCMC) simulation.
 
     This function simulates the potential losses to an asset based on a given exposure factor (EF) and annual rate of occurrence (ARO) for a specific asset value (AV). It then simulates the impact of risk reduction controls that lower the ARO and calculates how these controls reduce potential losses. It provides a risk distribution and a loss exceedance curve both before and after controls are applied. The statistics and simulation results are either plotted or returned as a dictionary.
@@ -626,8 +629,8 @@ def plot_risk_calculation_before_after(
         annual_rate_of_occurrence: The frequency of the risk event over a year, expressed as a decimal.
         reduction_percentage: The percentage reduction in the ARO after applying risk controls, expressed as a percentage.
         cost_of_controls: The cost of implementing the risk controls, expressed in monetary units.
-        plot: A boolean indicating whether to plot the results (default is True). Set to True if output_file ends with '.png'.
-        output_file: The path to save the output file as either a JSON or PNG file. If it ends with '.png', plot is set to True and the plot is saved to the file. If None, the output is a dictionary instead of a file (default is None).
+        output_json_file: The path to save the output file as a JSON file. If None, the output is not saved (default is None).
+        output_png_file: The path to save the output plot as a PNG file. If None, the plot is not saved (default is None).
         monte_carlo_seed: The seed for the Monte Carlo simulation to ensure reproducibility (default is constant MONTE_CARLO_SEED).
         num_simulations: The number of simulations to run for the Monte Carlo analysis (default is constant NUM_SIMULATIONS).
         kurtosis: The kurtosis value to adjust the shape of the beta distribution for the EF (default is constant KURTOSIS).
@@ -644,8 +647,7 @@ def plot_risk_calculation_before_after(
         annual_rate_of_occurrence=annual_rate_of_occurrence,
         reduction_percentage=reduction_percentage,
         cost_of_controls=cost_of_controls,
-        plot=plot,
-        output_file=output_file,
+        output_file=output_json_file,
         monte_carlo_seed=monte_carlo_seed,
         num_simulations=num_simulations,
         kurtosis=kurtosis,
@@ -731,7 +733,7 @@ def plot_risk_calculation_before_after(
 
     nonzero_adjusted_losses = adjusted_losses[adjusted_losses > 0]
 
-    # Output results as a dictionary or save to a file
+    # Output results as a dictionary
     return_data = {
         "before_controls_stats": {
             "mean": float(calc_stats["Mean"]),
@@ -796,23 +798,13 @@ def plot_risk_calculation_before_after(
         },
     }
 
-    # Instantiate a variable to store the plot file name
-    plot_file_name = None
+    # Save JSON output if specified
+    if output_json_file:
+        with open(output_json_file, "w") as file:
+            json.dump(return_data, file, indent=4)
 
-    # If output file ends with .json, save as JSON, then exit without plotting. If ends with .png, use that as the plot file name.
-    if output_file:
-        if output_file.endswith(".json"):
-            with open(output_file, "w") as file:
-                json.dump(return_data, file, indent=4)
-            return None
-        elif output_file.endswith(".png"):
-            plot = True
-            plot_file_name = output_file
-        else:
-            raise ValueError("Output file must be a JSON file or a PNG file")
-
-    if plot:
-        # Set default figure size as 2:1 aspect ratio with 120 DPI which results in resolution of 1920x960 pixels. This should be broadly compatible with most screen sizes and resolutions as of 2024
+    if output_png_file:
+        # Set default figure size as 2:1 aspect ratio with 120 DPI
         plt.rcParams["figure.figsize"] = [16, 8]
         plt.rcParams["figure.dpi"] = 120
 
@@ -927,8 +919,8 @@ def plot_risk_calculation_before_after(
         plt.subplots_adjust(bottom=0.25, hspace=0.25)  # Make room for the tables
 
         # Save or display the plot
-        if plot_file_name is not None:
-            plt.savefig(plot_file_name, bbox_inches="tight")
+        if output_png_file:
+            plt.savefig(output_png_file, bbox_inches="tight")
         else:
             plt.show()
 
@@ -948,8 +940,8 @@ def main():
             item["annual_rate_of_occurrence"],
             item["percentage_reduction"],
             item["cost_of_control"],
-            plot=True,
-            output_file=f"output_{item['id']}.png",
+            output_json_file=f"output_{item['id']}.json",
+            output_png_file=f"output_{item['id']}.png",
             simulation_method=0,
         )
 
