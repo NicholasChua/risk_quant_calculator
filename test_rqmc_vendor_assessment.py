@@ -506,75 +506,71 @@ def plot_vendor_analysis(
     ax3 = fig.add_subplot(gs[1, :])  # Span both columns
     ax3.axis("off")
 
-    # Prepare data for both vendors
-    best_stats = {
-        "id": best_vendor["vendor_id"],
-        "rosi_mean": best_vendor["mean_rosi"],
-        "rosi_median": best_vendor["median_rosi"],
-        "rosi_mode": best_vendor["mode_rosi"],
-        "ale_reduction": best_vendor["mean_ale_reduction"],
-        "ale_after_mean": best_vendor["mean_ale_after"],
-        "ale_after_median": best_vendor["median_ale_after"],
-        "ale_after_mode": best_vendor["mode_ale_after"],
-    }
-
-    most_effective_stats = {
-        "id": most_effective_vendor["vendor_id"],
-        "rosi_mean": most_effective_vendor["mean_rosi"],
-        "rosi_median": most_effective_vendor["median_rosi"],
-        "rosi_mode": most_effective_vendor["mode_rosi"],
-        "ale_reduction": most_effective_vendor["mean_ale_reduction"],
-        "ale_after_mean": most_effective_vendor["mean_ale_after"],
-        "ale_after_median": most_effective_vendor["median_ale_after"],
-        "ale_after_mode": most_effective_vendor["mode_ale_after"],
-    }
-
     if is_same_vendor:
         # Single column format for same vendor
         full_text = f"""
-        Best ROSI & Most Effective Vendor (ID: {best_stats['id']})
+        Best ROSI & Most Effective Vendor (ID: {best_vendor['vendor_id']})
         ------------------------------------------
         ROSI Statistics:
-          Mean:   {best_stats['rosi_mean']:.2f}%
-          Median: {best_stats['rosi_median']:.2f}%
-          Mode:   {best_stats['rosi_mode']:.2f}%
+          Mean: {next(v["mean_rosi"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}%
+          Median: {next(v["median_rosi"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}%
+          Mode: {next(v["mode_rosi"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}% ({next(v["mode_rosi_percentage"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}%)
+          Std Dev: {currency_symbol}{next(v["std_dev_rosi"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}
         
-        ALE Reduction: {best_stats['ale_reduction'] * 100:.2f}%
+        ALE Reduction: {next(v["mean_ale_reduction"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]) * 100:.2f}%
         ALE After Statistics:
-          Mean:   {currency_symbol}{best_stats['ale_after_mean']:.2f}
-          Median: {currency_symbol}{best_stats['ale_after_median']:.2f}
-          Mode:   {currency_symbol}{best_stats['ale_after_mode']:.2f}
+          Mean: {currency_symbol}{next(v["mean_ale_after"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}
+          Median: {currency_symbol}{next(v["median_ale_after"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}
+          Mode: {currency_symbol}{next(v["mode_ale_after"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f} ({next(v["mode_ale_after_percentage"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}%)
+          Std Dev: {currency_symbol}{next(v["std_dev_ale_after"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}
         """
+
+        ax3.text(
+            0.5,  # Centered
+            0.95,
+            full_text,
+            ha="center",
+            va="top",
+            fontsize=10,
+
+            transform=ax3.transAxes,
+            linespacing=1.5,
+            bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=10),
+        )
     else:
         # Two column format for different vendors
         best_text = f"""
-        Best ROSI Vendor (ID: {best_stats['id']})
+        Best ROSI Vendor (ID: {best_vendor['vendor_id']})
         ------------------------------------------
         ROSI Statistics:
-          Mean:   {best_stats['rosi_mean']:.2f}%
-          Median: {best_stats['rosi_median']:.2f}%
-          Mode:   {best_stats['rosi_mode']:.2f}%
+          Mean: {next(v["mean_rosi"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}%
+          Median: {next(v["median_rosi"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}%
+          Mode: {next(v["mode_rosi"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}% ({next(v["mode_rosi_percentage"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}%)
+          Std Dev: {currency_symbol}{next(v["std_dev_rosi"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}
         
-        ALE Reduction: {best_stats['ale_reduction'] * 100:.2f}%
+        ALE Reduction: {next(v["mean_ale_reduction"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]) * 100:.2f}%
         ALE After Statistics:
-          Mean:   {currency_symbol}{best_stats['ale_after_mean']:.2f}
-          Median: {currency_symbol}{best_stats['ale_after_median']:.2f}
-          Mode:   {currency_symbol}{best_stats['ale_after_mode']:.2f}
+          Mean: {currency_symbol}{next(v["mean_ale_after"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}
+          Median: {currency_symbol}{next(v["median_ale_after"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}
+          Mode: {currency_symbol}{next(v["mode_ale_after"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f} ({next(v["mode_ale_after_percentage"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}%)
+          Std Dev: {currency_symbol}{next(v["std_dev_ale_after"] for v in vendor_statistics if v["vendor_id"] == best_vendor["vendor_id"]):.2f}
         """
 
         effective_text = f"""
-        Most Effective Vendor (ID: {most_effective_stats['id']})
+        Most Effective Vendor (ID: {most_effective_vendor['vendor_id']})
         ------------------------------------------
         ROSI Statistics:
-          Mean:   {most_effective_stats['rosi_mean']:.2f}%
-          Median: {most_effective_stats['rosi_median']:.2f}%
-          Mode:   {most_effective_stats['rosi_mode']:.2f}%
+          Mean: {next(v["mean_rosi"] for v in vendor_statistics if v["vendor_id"] == most_effective_vendor["vendor_id"]):.2f}%
+          Median: {next(v["median_rosi"] for v in vendor_statistics if v["vendor_id"] == most_effective_vendor["vendor_id"]):.2f}%
+          Mode: {next(v["mode_rosi"] for v in vendor_statistics if v["vendor_id"] == most_effective_vendor["vendor_id"]):.2f}% ({next(v["mode_rosi_percentage"] for v in vendor_statistics if v["vendor_id"] == most_effective_vendor["vendor_id"]):.2f}%)
+          Std Dev: {currency_symbol}{next(v["std_dev_rosi"] for v in vendor_statistics if v["vendor_id"] == most_effective_vendor["vendor_id"]):.2f}
         
-        ALE Reduction: {most_effective_stats['ale_reduction'] * 100:.2f}%
+        ALE Reduction: {next(v["mean_ale_reduction"] for v in vendor_statistics if v["vendor_id"] == most_effective_vendor["vendor_id"]) * 100:.2f}%
         ALE After Statistics:
-          Mean:   {currency_symbol}{most_effective_stats['ale_after_mean']:.2f}
-          Median: {currency_symbol}{most_effective_stats['ale_after_median']:.2f}
-          Mode:   {currency_symbol}{most_effective_stats['ale_after_mode']:.2f}
+          Mean: {currency_symbol}{next(v["mean_ale_after"] for v in vendor_statistics if v["vendor_id"] == most_effective_vendor["vendor_id"]):.2f}
+          Median: {currency_symbol}{next(v["median_ale_after"] for v in vendor_statistics if v["vendor_id"] == most_effective_vendor["vendor_id"]):.2f}
+          Mode: {currency_symbol}{next(v["mode_ale_after"] for v in vendor_statistics if v["vendor_id"] == most_effective_vendor["vendor_id"]):.2f} ({next(v["mode_ale_after_percentage"] for v in vendor_statistics if v["vendor_id"] == most_effective_vendor["vendor_id"]):.2f}%)
+          Std Dev: {currency_symbol}{next(v["std_dev_ale_after"] for v in vendor_statistics if v["vendor_id"] == most_effective_vendor["vendor_id"]):.2f}
         """
 
         # Position text in two columns
