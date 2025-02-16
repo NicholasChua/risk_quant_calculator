@@ -1,22 +1,33 @@
 import csv
 import itertools
 import json
-from scipy.stats import gaussian_kde
 import numpy as np
 from SALib.sample import sobol as sobol_sample
 from SALib.analyze import sobol as sobol_analyze
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-import rqmc_sobol_sensitivity_analysis as rqmc
+from common import (
+    calculate_ale,
+    calculate_rosi,
+    calculate_mode,
+    find_first_non_zero_percentile,
+    setup_sensitivity_problem,
+    simulate_exposure_factor_sobol,
+    simulate_annual_rate_of_occurrence_sobol,
+    simulate_control_effectiveness_sobol,
+    randomize_sobol_samples,
+    convert_to_serializable,
+)
 
 
 RANDOM_SEED = 42
+NUM_SAMPLES = 16384
 KURTOSIS = 1.7
-NUM_SAMPLES = 8192
+CURRENCY_SYMBOL = "\\$"
 
 
-def load_csv_data(
+def _load_csv_data(
     file_path: str,
 ) -> dict[str, list[dict[str, int | float | list[float]]]]:
     """Helper function to load data from a CSV file containing input parameters for the risk calculation.
@@ -132,48 +143,6 @@ def load_csv_data(
     return result
 
 
-def _find_first_nonzero_percentile(
-    values: np.ndarray, precision_dp: int = 2
-) -> tuple[float, float]:
-    """Find the first non-zero percentile and its value. Default precision is 0.01% (2 decimal places).
-
-    Args:
-        values: Array of values to analyze
-        precision_dp: Number of decimal places for percentile precision. Default is 2 (0.01%)
-
-    Returns:
-        tuple: (percentile, value) where percentile is the first percentile with non-zero value
-    """
-    # Calculate number of points needed for desired precision
-    num_points = 100 * (10**precision_dp)
-    # Generate percentiles with specified precision
-    percentiles = np.linspace(1 / (10**precision_dp), 100, num=num_points)
-
-    for p in percentiles:
-        value = np.percentile(values, p)
-        if value > 0:
-            return p, value
-    return None, None
-
-
-def simulate_control_effectiveness_sobol(
-    sobol_samples: np.ndarray, ce_range: list[float]
-) -> np.ndarray:
-    """Simulate control effectiveness using Sobol samples mapped to a Uniform distribution.
-
-    Args:
-        sobol_samples: Sobol samples.
-        ce_range: Control effectiveness range.
-
-    Returns:
-        np.ndarray: Simulated control effectiveness values
-    """
-    # Scale Sobol samples to the desired range
-    control_effectiveness = ce_range[0] + sobol_samples * (ce_range[1] - ce_range[0])
-
-    return control_effectiveness
-
-
 def evaluate_model(
     asset_value: float,
     control_costs: list[float],
@@ -207,7 +176,7 @@ def evaluate_model(
         params = dict(zip(param_names, row))
 
         # Calculate ALE before controls
-        ale_before = rqmc.calculate_ale(asset_value, params["EF"], params["ARO"])
+        ale_before = calculate_ale(asset_value, params["EF"], params["ARO"])
 
         # Calculate ALE after controls
         ale_after = ale_before
@@ -216,7 +185,7 @@ def evaluate_model(
                 ale_after *= 1 - params[name]
 
         # Calculate ROSI
-        rosi = rqmc.calculate_rosi(ale_before, ale_after, control_costs)
+        rosi = calculate_rosi(ale_before, ale_after, control_costs)
 
         # Append ROSI to output array
         Y.append(rosi)
@@ -224,29 +193,29 @@ def evaluate_model(
     return np.array(Y)
 
 
-def calculate_mode(values):
-    """Calculate mode using kernel density estimation and its percentage in the distribution
+# def calculate_mode(values):
+#     """Calculate mode using kernel density estimation and its percentage in the distribution
 
-    Args:
-        values: Array of values to analyze
+#     Args:
+#         values: Array of values to analyze
 
-    Returns:
-        tuple: (mode value, percentage of values within 1% of mode)
-    """
-    if len(values) < 2:
-        return (values[0], 100.0) if len(values) == 1 else (None, None)
+#     Returns:
+#         tuple: (mode value, percentage of values within 1% of mode)
+#     """
+#     if len(values) < 2:
+#         return (values[0], 100.0) if len(values) == 1 else (None, None)
 
-    kde = gaussian_kde(values)
-    grid = np.linspace(min(values), max(values), 100)
-    mode_idx = np.argmax(kde(grid))
-    mode = grid[mode_idx]
+#     kde = gaussian_kde(values)
+#     grid = np.linspace(min(values), max(values), 100)
+#     mode_idx = np.argmax(kde(grid))
+#     mode = grid[mode_idx]
 
-    # Calculate percentage of values within 1% of mode
-    mode_range = 0.01 * mode
-    count = np.sum((values >= mode - mode_range) & (values <= mode + mode_range))
-    percentage = (count / len(values)) * 100
+#     # Calculate percentage of values within 1% of mode
+#     mode_range = 0.01 * mode
+#     count = np.sum((values >= mode - mode_range) & (values <= mode + mode_range))
+#     percentage = (count / len(values)) * 100
 
-    return mode, percentage
+#     return mode, percentage
 
 
 def perform_sensitivity_analysis(
@@ -301,7 +270,7 @@ def perform_sensitivity_analysis(
         return {}, {}
 
     # Setup sensitivity analysis problem
-    problem = rqmc.setup_sensitivity_problem(**problem_dict)
+    problem = setup_sensitivity_problem(**problem_dict)
 
     # Generate samples using sobol sampler
     param_values = sobol_sample.sample(
@@ -336,7 +305,7 @@ def perform_sensitivity_analysis(
     return sensitivity_analysis, problem
 
 
-def plot_vendor_analysis(
+def _plot_vendor_analysis(
     sensitivity_analysis: dict[str, dict[str, float]],
     problem: dict[str, list[str]],
     vendor_statistics: list[dict[str, float | int | list[float]]],
@@ -532,7 +501,6 @@ def plot_vendor_analysis(
             ha="center",
             va="top",
             fontsize=10,
-
             transform=ax3.transAxes,
             linespacing=1.5,
             bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=10),
@@ -606,33 +574,54 @@ def simulate_vendor_assessment_decision(
     asset_value: float,
     ef_range: list[float],
     aro_range: list[float],
-    control_reduction_ranges: list[list[float]],
     control_costs: list[float],
+    control_reduction_ranges: list[list[float]],
     num_vendors: int,
+    kurtosis: float = KURTOSIS,
+    num_samples: int = NUM_SAMPLES,
+    currency_symbol: str = CURRENCY_SYMBOL,
     output_json_file: str = None,
     output_png_file: str = None,
-    num_samples: int = NUM_SAMPLES,
-    kurtosis: float = KURTOSIS,
 ) -> None:
-    """Simulate vendor assessment decision based on the input parameters and write the results to a JSON file.
+    """Given a set of security controls to be implemented that can be provided by multiple vendors, determine the optimal vendor(s) to minimize the risk to the asset, based on ROSI (used to determine the best vendor when prioritizing cost effectiveness) and ALE reduction (used to determine the most effective vendor regardless of cost), using RQMC and Sobol sensitivity analysis.
+
+    The simulation uses:
+        - Sobol samples for the exposure factor, annual rate of occurrence, and control effectiveness of each vendor
+        - RQMC for adding randomness to the Sobol samples and generating multiple scenarios for each vendor
+        - Beta distribution for introducing kurtosis to the exposure factor
+        - Poisson distribution for simulating the annual rate of occurrence, with a specified number of decimal places to bypass the integer limitation of the distriubtion
+        - Uniform distribution for the control effectiveness of each vendor based on the provided ranges given no reason to assume a specific distribution
+        - Sobol sensitivity analysis as a global sensitivity analysis method to determine the impact of varying the exposure factor, annual rate of occurrence, and control costs on the ROSI
+            - First order sensitivity index (S1) measures the impact of each parameter on the output
+            - Total order sensitivity index (ST) measures the impact of each parameter, including interactions with other parameters
+
+    The implementation performs a multivariate simulation to evaluate the ALE and ROSI for each vendor, given variability of EF, ARO, and control effectiveness, expressed as a range. The simulation results are then used to determine the best and most effective vendor(s) based on the calculated statistics. The simulation also performs a sensitivity analysis to determine the impact of varying the EF, ARO, and control effectiveness on the ROSI.
+
+    An example scenario is as follows:
+        - You have an asset value of X
+        - You have 4 vendors providing security controls (referred to as 1, 2, 3, 4), with a cost of A, B, C, D
+        - You predict the exposure factor to be between X_ef and Y_ef
+        - You predict the annual rate of occurrence to be between X_aro and Y_aro
+        - You don't know the exact control effectiveness, but you predict it to be between X_control and Y_control for each vendor
+        - You want to know which vendor to choose, considering the best balance between cost and effectiveness (using ROSI)
+        - You want to know which vendor to choose to minimize the risk to the asset, regardless of cost (using ALE reduction)
+        - You want to know the impact of varying the exposure factor, annual rate of occurrence, and control effectiveness on the ROSI
 
     Args:
-        asset_value: The value of the asset at risk, expressed in monetary units
-        ef_range: Exposure factor range
-        aro_range: Annual rate of occurrence range
-        control_reduction_ranges: List of control reduction ranges for each vendor
-        control_costs: List of control costs for each vendor, expressed in monetary units
-        num_vendors: Number of vendors
-        output_json_file: Output JSON file to save the results. Default is None
-        output_png_file: Output PNG file to save the plot. Default is None
-        num_samples: Number of samples to generate for the simulation. Default is NUM_SAMPLES
-        kurtosis: Kurtosis value for the exposure factor distribution. Default is KURTOSIS
+        asset_value: The value of the asset at risk, expressed in monetary units.
+        ef_range: The range of the exposure factor, representing the percentage of the asset value that is at risk during a risk event, expressed as decimals.
+        aro_range: The range of the annual rate of occurrence, representing the frequency of the risk event over a year, expressed as decimals.
+        control_costs: The base annualized cost of implementing each security control, expressed in monetary units as a list.
+        control_reduction_ranges: The percentage reduction in risk for each vendor's control, expressed as a list of lists containing the minimum and maximum values
+        num_vendors: Number of vendors to simulate.
+        kurtosis: The kurtosis of the distribution for the exposure factor. Default is constant KURTOSIS.
+        num_samples: The number of samples to generate for the simulation. Default is constant NUM_SAMPLES.
+        currency_symbol: The currency symbol to use for displaying monetary values. Default is constant CURRENCY_SYMBOL.
+        output_json_file: The output JSON file to save the simulation results. Default is None.
+        output_png_file: The output PNG file to save the simulation results. Default is None.
 
     Returns:
         None
-
-    Raises:
-        ValueError: If control_reduction_ranges is not a list of lists
     """
     # Initialize results dictionary
     results = {
@@ -710,11 +699,11 @@ def simulate_vendor_assessment_decision(
                 ),
             )
         }
-        problem_combined = rqmc.setup_sensitivity_problem(**combined_parameters)
+        problem_combined = setup_sensitivity_problem(**combined_parameters)
         sobol_combined = sobol_sample.sample(
             problem_combined, num_samples, calc_second_order=False, seed=RANDOM_SEED
         )
-        sobol_combined = rqmc.randomize_sobol_samples(sobol_combined)
+        sobol_combined = randomize_sobol_samples(sobol_combined)
         sobol_combined = sobol_combined[:num_samples, :]
 
     # Initialize slices
@@ -748,8 +737,8 @@ def simulate_vendor_assessment_decision(
                 col += 1
 
     # Simulate EF, ARO, and control effectiveness using Sobol samples
-    ef_samples = rqmc.simulate_exposure_factor_sobol(ef_slice, ef_range, kurtosis)
-    aro_samples = rqmc.simulate_annual_rate_of_occurrence_sobol(aro_slice, aro_range)
+    ef_samples = simulate_exposure_factor_sobol(ef_slice, ef_range, kurtosis)
+    aro_samples = simulate_annual_rate_of_occurrence_sobol(aro_slice, aro_range)
     control_reduction_samples = np.zeros((num_samples, len(control_reduction_ranges)))
 
     for i in range(len(control_reduction_ranges)):
@@ -777,16 +766,16 @@ def simulate_vendor_assessment_decision(
             control_reduction_sample = control_reduction_samples[sample][vendor]
 
             # Calculate ALE before applying controls
-            ale_before = rqmc.calculate_ale(asset_value, ef_sample, aro_sample)
+            ale_before = calculate_ale(asset_value, ef_sample, aro_sample)
 
             # Adjust the ARO based on the control effectiveness
             new_aro = aro_sample * (1 - control_reduction_sample)
 
             # Calculate ALE after applying controls
-            ale_after = rqmc.calculate_ale(asset_value, ef_sample, new_aro)
+            ale_after = calculate_ale(asset_value, ef_sample, new_aro)
 
             # Calculate ROSI
-            rosi = rqmc.calculate_rosi(ale_before, ale_after, control_costs[vendor])
+            rosi = calculate_rosi(ale_before, ale_after, control_costs[vendor])
 
             # Store results for this iteration
             ale_before_values.append(ale_before)
@@ -829,7 +818,7 @@ def simulate_vendor_assessment_decision(
         (
             vendor_stat["first_nonzero_percentile_ale_after"],
             vendor_stat["first_nonzero_value_ale_after"],
-        ) = _find_first_nonzero_percentile(ale_after_values)
+        ) = find_first_non_zero_percentile(ale_after_values)
         for p in percentiles:
             vendor_stat[f"ale_after_percentile_{p}"] = np.percentile(
                 ale_after_values, p
@@ -880,13 +869,13 @@ def simulate_vendor_assessment_decision(
 
     # Write results to JSON file if specified
     if output_json_file:
-        serialized_results = rqmc.convert_to_serializable(results)
+        serialized_results = convert_to_serializable(results)
         with open(output_json_file, "w") as file:
             json.dump(serialized_results, file, indent=4)
 
     # Plot vendor analysis if output PNG file is specified
     if output_png_file:
-        plot_vendor_analysis(
+        _plot_vendor_analysis(
             sensitivity_results,
             problem,
             results["vendor_statistics"],
@@ -895,14 +884,14 @@ def simulate_vendor_assessment_decision(
 
 
 def main():
-    test = load_csv_data("rqmc_vendor_example.csv")
+    test = _load_csv_data("rqmc_vendor_example.csv")
     for item in test["data"]:
         simulate_vendor_assessment_decision(
             item["asset_value"],
             item["ef_range"],
             item["aro_range"],
-            item["control_reduction_ranges"],
             item["control_costs"],
+            item["control_reduction_ranges"],
             item["num_vendors"],
             output_json_file=f"{item['id']}_rqmc_vendor_assessment.json",
             output_png_file=f"{item['id']}_rqmc_vendor_assessment.png",

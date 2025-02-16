@@ -2,7 +2,6 @@ import itertools
 from textwrap import wrap
 from matplotlib.gridspec import GridSpec
 import numpy as np
-from scipy.stats import beta, poisson
 from itertools import permutations
 import matplotlib.pyplot as plt
 import json
@@ -10,10 +9,16 @@ from SALib.sample import sobol as sobol_sample
 from SALib.analyze import sobol as sobol_analyze
 import csv
 
-from risk_simulator import (
-    get_beta_parameters_for_kurtosis,
-)
 
+from common import (
+    calculate_ale,
+    calculate_rosi,
+    setup_sensitivity_problem,
+    simulate_exposure_factor_sobol,
+    simulate_annual_rate_of_occurrence_sobol,
+    randomize_sobol_samples,
+    convert_to_serializable,
+)
 
 RANDOM_SEED = 42
 NUM_SAMPLES = 16384  # Number of Sobol samples 2^14
@@ -21,7 +26,7 @@ KURTOSIS = 1.7  # Results in alpha and beta of 0.5
 CURRENCY_SYMBOL = "\\$"
 
 
-def load_csv_data(
+def _load_csv_data(
     file_path: str,
 ) -> dict[str, list[dict[str, int | float | list[float]]]]:
     """Helper function to load data from a CSV file containing input parameters for the risk calculation.
@@ -136,124 +141,6 @@ def load_csv_data(
         raise ValueError(f"CSV parsing error: {str(e)}")
 
     return result
-
-
-# TODO: Move this to a common library file
-def calculate_ale(
-    asset_value: float, exposure_factor: float, annual_rate_of_occurrence: float
-) -> float:
-    """Calculate the annualized loss expectancy (ALE) given the asset value, exposure factor, and annual rate of occurrence.
-
-    Args:
-        asset_value: Asset value
-        exposure_factor: Exposure factor
-        annual_rate_of_occurrence: Annual rate of occurrence
-
-    Returns:
-        float: Annualized loss expectancy
-    """
-    return asset_value * exposure_factor * annual_rate_of_occurrence
-
-
-def calculate_rosi(
-    ale_before: float, ale_after: float, control_costs: list[float] | float
-) -> float:
-    """Calculate the return on security investment (ROSI) given the ALE before and after implementing controls and the control costs.
-
-    Args:
-        ale_before: Annualized loss expectancy before implementing controls
-        ale_after: Annualized loss expectancy after implementing controls
-        control_costs: Annualized cost of controls (either a single float or a list of floats)
-
-    Returns:
-        float: Return on security investment
-    """
-    if isinstance(control_costs, float):
-        total_control_costs = control_costs
-    else:
-        total_control_costs = sum(control_costs)
-
-    return (ale_before - ale_after - total_control_costs) / total_control_costs * 100
-
-
-def simulate_exposure_factor_sobol(
-    sobol_samples: np.ndarray, ef_range: list[float], kurtosis: int
-) -> np.ndarray:
-    """Simulate exposure factor using Sobol samples mapped to a Beta distribution with a specified kurtosis.
-
-    Args:
-        sobol_samples: Sobol samples
-        ef_range: Exposure factor range
-        kurtosis: Kurtosis of the distribution
-
-    Returns:
-        np.ndarray: Simulated exposure factors
-    """
-    # To avoid beta.ppf(0 or 1) = inf/NaN, clamp the samples:
-    eps = 1e-9
-    sobol_samples = np.clip(sobol_samples, eps, 1 - eps)
-
-    # Calculate Beta parameters based on kurtosis
-    alpha_param, beta_param = get_beta_parameters_for_kurtosis(kurtosis)
-
-    # Map Sobol samples to Beta distribution using inverse CDF quantile function
-    beta_samples = beta.ppf(sobol_samples, alpha_param, beta_param)
-
-    # Scale Beta samples to the desired range
-    exposure_factors = ef_range[0] + beta_samples * (ef_range[1] - ef_range[0])
-
-    return exposure_factors
-
-
-def simulate_annual_rate_of_occurrence_sobol(
-    sobol_samples: np.ndarray, aro_range: list[float], decimal_places: int = 2
-) -> np.ndarray:
-    """Simulate annual rate of occurrence using Sobol samples mapped to a Poisson distribution with specified decimal precision. As Poisson distribution accepts only integer values, the Sobol samples are scaled up to the desired precision, mapped to the Poisson distribution, and then scaled back to the original scale, bypassing the decimal limitation.
-
-    Args:
-        sobol_samples: Sobol samples
-        aro_range: Annual rate of occurrence range
-        decimal_places: Number of decimal places for the generated values (default is 2)
-
-    Returns:
-        np.ndarray: Simulated annual rates of occurrence
-    """
-    # To avoid poisson.ppf(0 or 1) = inf/NaN, clamp the samples:
-    eps = 1e-9
-    sobol_samples = np.clip(sobol_samples, eps, 1 - eps)
-
-    # Scale factor for desired decimal precision
-    scale_factor = 10**decimal_places
-
-    # Scale Sobol samples to integers
-    scaled_sobol_samples = sobol_samples * scale_factor
-
-    # Map Sobol samples to Poisson distribution using inverse CDF quantile function
-    poisson_samples = poisson.ppf(
-        scaled_sobol_samples / scale_factor, mu=np.mean(aro_range) * scale_factor
-    )
-
-    # Convert back to the original scale
-    aro_samples = poisson_samples / scale_factor
-
-    # Clip the values to the desired range
-    aro_samples = np.clip(aro_samples, aro_range[0], aro_range[1])
-
-    return aro_samples
-
-
-def randomize_sobol_samples(sobol_samples: np.ndarray) -> np.ndarray:
-    """Randomize Sobol samples using a uniform random shift.
-
-    Args:
-        sobol_samples: Original Sobol samples
-
-    Returns:
-        np.ndarray: Randomized Sobol samples
-    """
-    random_shift = np.random.uniform(size=sobol_samples.shape)
-    randomized_samples = (sobol_samples + random_shift) % 1
-    return randomized_samples
 
 
 def calculate_compounding_costs(
@@ -481,65 +368,6 @@ def calculate_statistics_for_permutation_aggregate(
     return results
 
 
-def convert_to_serializable(obj: any) -> any:
-    """Recursively converts numpy arrays, dictionaries, and lists into serializable formats.
-
-    Args:
-        obj: The object to be converted. It can be a numpy array, dictionary, list, or any other type.
-
-    Returns:
-        any: The converted object in a serializable format. Numpy arrays are converted to lists, dictionaries are recursively processed, and lists are recursively processed. Other types are returned as is.
-    """
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, dict):
-        return {k: convert_to_serializable(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_to_serializable(i) for i in obj]
-    else:
-        return obj
-
-
-def setup_sensitivity_problem(
-    **kwargs: dict[str, list[float]]
-) -> dict[str, int | list[str] | list[float]]:
-    """Define the model inputs and their bounds for sensitivity analysis.
-
-    Args:
-        **kwargs: Dictionary of parameter names and their bounds in a list with two floats
-
-    Returns:
-        dict[str, int | list[str] | list[float]]: Problem dictionary for sensitivity analysis
-
-    Raises:
-        ValueError: If the parameter values are not lists of two floats
-    """
-    # Verify kwargs is a dictionary with the correct type
-    if not isinstance(kwargs, dict):
-        raise ValueError("Input parameters must be provided as a dictionary")
-
-    # Verify input parameters contain only two floats
-    for key, value in kwargs.items():
-        if not isinstance(key, str):
-            raise ValueError(f"Parameter name {key} must be a string")
-        if (
-            not isinstance(value, list)
-            or len(value) != 2
-            or not all(isinstance(i, float) for i in value)
-        ):
-            raise ValueError(f"Parameter {key} must be a list of two floats")
-
-    names = list(kwargs.keys())
-    bounds = list(kwargs.values())
-
-    problem = {
-        "num_vars": len(names),
-        "names": names,
-        "bounds": bounds,
-    }
-    return problem
-
-
 def evaluate_model(
     asset_value: float,
     control_costs: list[float],
@@ -650,7 +478,12 @@ def perform_sensitivity_analysis(
 
     # Run model evaluations
     Y = evaluate_model(
-        asset_value, control_costs, control_reductions, param_values, problem, fixed_values
+        asset_value,
+        control_costs,
+        control_reductions,
+        param_values,
+        problem,
+        fixed_values,
     )
 
     # Create a copy of the problem dictionary to convert to numpy arrays
@@ -732,7 +565,7 @@ def _format_scenario_text(
     return f"""Scenario: You have an asset value of {currency_symbol}{asset_value:.2f} and want to implement {num_years} security controls over {num_years} years at a rate of one control per year. {ef_text}. {aro_text}. {cost_text}."""
 
 
-def plot_combined_analysis(
+def _plot_combined_analysis(
     sensitivity_analysis: dict[str, dict[str, float]],
     problem: dict[str, list[str]],
     exported_results: dict[str, any],
@@ -783,8 +616,12 @@ def plot_combined_analysis(
         indices = np.arange(len(problem["names"]))
 
         # Extract sensitivity indices
-        S1_percent = [sensitivity_analysis[name]["S1"] * 100 for name in problem["names"]]
-        ST_percent = [sensitivity_analysis[name]["ST"] * 100 for name in problem["names"]]
+        S1_percent = [
+            sensitivity_analysis[name]["S1"] * 100 for name in problem["names"]
+        ]
+        ST_percent = [
+            sensitivity_analysis[name]["ST"] * 100 for name in problem["names"]
+        ]
 
         # Plot S1 and ST bars next to each other
         ax1.bar(
@@ -1036,11 +873,11 @@ def simulate_control_sequence_optimization(
         cost_adjustment_range: The range of the cost adjustment for each control per year, expressed as decimals.
         control_reductions: The percentage reduction in risk for each control, expressed as decimals.
         num_years: The number of years to simulate.
-        kurtosis: The kurtosis of the distribution for the exposure factor. Default is constant KURTOSIS
-        num_samples: The number of samples to generate for the simulation. Default is constant NUM_SAMPLES
-        currency_symbol: The currency symbol to use for displaying monetary values. Default is constant CURRENCY_SYMBOL
-        json_output_file: The output JSON file to save the simulation results. Default is None
-        png_output_file: The output PNG file to save the simulation results. Default is None
+        kurtosis: The kurtosis of the distribution for the exposure factor. Default is constant KURTOSIS.
+        num_samples: The number of samples to generate for the simulation. Default is constant NUM_SAMPLES.
+        currency_symbol: The currency symbol to use for displaying monetary values. Default is constant CURRENCY_SYMBOL.
+        output_json_file: The output JSON file to save the simulation results. Default is None.
+        output_png_file: The output PNG file to save the simulation results. Default is None.
 
     Returns:
         None
@@ -1192,7 +1029,7 @@ def simulate_control_sequence_optimization(
         json.dump(serializable_results, f, indent=4)
 
     # Plot the combined analysis
-    plot_combined_analysis(
+    _plot_combined_analysis(
         sensitivity_results,
         problem,
         exported_results,
@@ -1202,7 +1039,7 @@ def simulate_control_sequence_optimization(
 
 
 def main():
-    test = load_csv_data("rqmc_sobol_example.csv")
+    test = _load_csv_data("rqmc_sobol_example.csv")
     for item in test["data"]:
         simulate_control_sequence_optimization(
             item["asset_value"],

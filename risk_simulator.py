@@ -4,6 +4,13 @@ from scipy.stats import beta, poisson, gaussian_kde
 import csv
 import json
 
+from common import (
+    get_beta_parameters_for_kurtosis,
+    calculate_sle,
+    calculate_ale,
+    calculate_mode,
+    find_first_non_zero_percentile,
+)
 from verification import verify_mcmc_implementation
 
 MONTE_CARLO_SEED = 42
@@ -12,7 +19,7 @@ KURTOSIS = 1.7  # Default value is 3
 CURRENCY_SYMBOL = "\\$"
 
 
-def load_csv_data(file_path: str) -> dict[str, list[float]]:
+def _load_csv_data(file_path: str) -> dict[str, list[float]]:
     """Helper function to load data from a CSV file containing input parameters for the risk calculation.
 
     The CSV file should have the following columns in order:
@@ -47,7 +54,7 @@ def load_csv_data(file_path: str) -> dict[str, list[float]]:
     return result
 
 
-def load_json_data(file_path: str) -> dict[str, list[float]]:
+def _load_json_data(file_path: str) -> dict[str, list[float]]:
     """Helper function to load data from a JSON file containing input parameters for the risk calculation.
 
     Args:
@@ -74,95 +81,12 @@ def load_json_data(file_path: str) -> dict[str, list[float]]:
     return data
 
 
-def get_beta_parameters_for_kurtosis(kurtosis: int) -> tuple[float, float]:
-    """Helper function to estimate parameters 'a' and 'b' for the beta distribution to achieve a desired kurtosis.
-
-    This is a simplified heuristic mapping of kurtosis values to beta distribution parameters since the actual implementation involves math way beyond my pay grade/education level, and the actual implementation also runs too slowly for interactive use.
-
-    Args:
-        kurtosis: The desired kurtosis value for the distribution.
-
-    Returns:
-        tuple[float, float]: The parameters 'a' and 'b' for the beta distribution.
-    """
-    # For demonstration purposes, we'll adjust 'a' and 'b' based on the desired kurtosis.
-    if kurtosis <= 1.8:
-        a = b = 0.5  # Higher kurtosis (leptokurtic)
-    elif 1.8 < kurtosis <= 3:
-        a = b = 1  # Standard uniform distribution
-    elif 3 < kurtosis <= 9:
-        a = b = 2  # Lower kurtosis (platykurtic)
-    else:
-        a = b = 5  # Even lower kurtosis
-
-    return a, b
-
-
-def calculate_sle_ale(
-    asset_value: float, exposure_factor: float, annual_rate_of_occurrence: float
-) -> tuple[float, float]:
-    """Helper function to calculate Single Loss Expectancy (SLE) and Annualized Loss Expectancy (ALE) for a given asset.
-
-    Single Loss Expectancy (SLE) is the expected monetary loss every time a risk event occurs.
-
-    Annualized Loss Expectancy (ALE) is the expected monetary loss that can be expected for a year.
-
-    Args:
-        asset_value: The value of the asset at risk
-        exposure_factor: The percentage of asset value at risk
-        annual_rate_of_occurrence: The frequency of the risk event
-
-    Returns:
-        tuple[float, float]: A tuple containing:
-            - The Single Loss Expectancy (SLE)
-            - The Annualized Loss Expectancy (ALE)
-    """
-    SLE = asset_value * exposure_factor
-    ALE = SLE * annual_rate_of_occurrence
-    return SLE, ALE
-
-
-def find_first_non_zero_percentile(
-    data: np.ndarray, decimal_places: int = 2
-) -> tuple[float, float]:
-    """Helper function to find the first non-zero value and its percentile in a data array.
-    Considers a value non-zero if it rounds to non-zero at specified decimal places.
-
-    Args:
-        data: Numpy array of numeric values to analyze.
-        decimal_places: Number of decimal places to consider for zero comparison (default: 2).
-
-    Returns:
-        tuple[float, float]: A tuple containing:
-            - The percentile (0-100) at which first non-zero value occurs
-            - The first non-zero value found
-
-    Raises:
-        TypeError: If input is not a numpy array.
-        ValueError: If array is empty or decimal_places is negative.
-    """
-    if not isinstance(data, np.ndarray):
-        raise TypeError("Input must be a numpy array")
-    if len(data) == 0:
-        raise ValueError("Input array cannot be empty")
-    if decimal_places < 0:
-        raise ValueError("Decimal places must be non-negative")
-
-    # Round data to specified decimal places
-    rounded_data = np.round(data, decimals=decimal_places)
-    sorted_data = np.sort(data)  # Original values for return
-    sorted_rounded = np.sort(rounded_data)  # Rounded for comparison
-
-    # Find first non-zero in rounded data
-    non_zero_idx = np.argmax(sorted_rounded > 0)
-    if non_zero_idx == 0 and sorted_rounded[0] == 0:
-        return 0.0, 0.0
-
-    percentile = (non_zero_idx / len(data)) * 100
-    return float(percentile), float(sorted_data[non_zero_idx])
-
-
-def _simulate_clamped_ef(input_ef: float, variability: int = 0, kurtosis: float = KURTOSIS, num_simulations: int = NUM_SIMULATIONS) -> np.ndarray:
+def _simulate_clamped_ef(
+    input_ef: float,
+    variability: int = 0,
+    kurtosis: float = KURTOSIS,
+    num_simulations: int = NUM_SIMULATIONS,
+) -> np.ndarray:
     """Helper function to simulate clamped exposure factors using a Beta distribution.
 
     The clamped exposure factor is generated by sampling from a Beta distribution with parameters adjusted for the desired kurtosis. The sampled values are then clamped to be within ± variability of the input EF. This function simulates uncertainty in the provided EF (percentage of asset value at risk). If the variability is set to 0, the results will have no variability and will be fixed.
@@ -178,14 +102,16 @@ def _simulate_clamped_ef(input_ef: float, variability: int = 0, kurtosis: float 
     """
     lower_bound = max(0.0, input_ef - input_ef * variability / 100)
     upper_bound = input_ef + input_ef * variability / 100
-    
+
     # Sample from Beta, then rescale to [lower_bound, upper_bound]
     alpha, beta_param = get_beta_parameters_for_kurtosis(kurtosis)
     raw = beta(a=alpha, b=beta_param).rvs(num_simulations)
     return lower_bound + raw * (upper_bound - lower_bound)
 
 
-def _simulate_clamped_aro(input_aro: float, variability: int = 0, num_simulations: int = NUM_SIMULATIONS) -> np.ndarray:
+def _simulate_clamped_aro(
+    input_aro: float, variability: int = 0, num_simulations: int = NUM_SIMULATIONS
+) -> np.ndarray:
     """Helper function to simulate clamped Annual Rate of Occurrence (ARO) values.
 
     The clamped ARO is generated by sampling from a Poisson distribution with a mean adjusted for the desired variability around the input ARO. The sampled values are then clamped to be within ± variability of the input ARO. This function simulates uncertainty in the provided ARO (frequency of the risk event). If the variability is set to 0, the results will have no variability and will be fixed.
@@ -276,18 +202,22 @@ def _simulate_losses_monte_carlo(
     alpha, beta_param = get_beta_parameters_for_kurtosis(kurtosis)
     # Sample a base EF from Beta, then clamp around the input EF
     base_EF_samples = beta(a=alpha, b=beta_param).rvs(num_simulations)
-    simulated_EF = _simulate_clamped_ef(
-        input_ef=exposure_factor,
-        variability=0, # Remove variability in simple Monte Carlo calculations
-        kurtosis=kurtosis,
-        num_simulations=num_simulations
-    ) * base_EF_samples / base_EF_samples.mean()
+    simulated_EF = (
+        _simulate_clamped_ef(
+            input_ef=exposure_factor,
+            variability=0,  # Remove variability in simple Monte Carlo calculations
+            kurtosis=kurtosis,
+            num_simulations=num_simulations,
+        )
+        * base_EF_samples
+        / base_EF_samples.mean()
+    )
 
     # Sample a base ARO from Poisson clamped around the input ARO
     simulated_ARO = _simulate_clamped_aro(
         input_aro=annual_rate_of_occurrence,
-        variability=0, # Remove variability in simple Monte Carlo calculations
-        num_simulations=num_simulations
+        variability=0,  # Remove variability in simple Monte Carlo calculations
+        num_simulations=num_simulations,
     )
 
     # Calculate losses
@@ -383,12 +313,12 @@ def _simulate_losses_with_mcmc(
         input_ef=exposure_factor,
         variability=0,
         kurtosis=kurtosis,
-        num_simulations=num_simulations
+        num_simulations=num_simulations,
     )
     clamped_aro = _simulate_clamped_aro(
         input_aro=annual_rate_of_occurrence,
         variability=0,
-        num_simulations=num_simulations
+        num_simulations=num_simulations,
     )
 
     # Scale while preserving shape
@@ -414,22 +344,6 @@ def _simulate_losses_with_mcmc(
     return losses
 
 
-def _calculate_mode_percentage(losses: np.ndarray) -> tuple[float, float]:
-    """Helper function to calculate the mode and its percentage occurrence.
-
-    Args:
-        losses: Array of simulated losses.
-
-    Returns:
-        tuple[float, float]: The mode and its percentage occurrence.
-    """
-    hist, bins = np.histogram(losses, bins=100)
-    mode_index = np.argmax(hist)
-    mode = (bins[mode_index] + bins[mode_index + 1]) / 2
-    mode_percentage = (hist[mode_index] / len(losses)) * 100
-    return mode, mode_percentage
-
-
 def _calculate_statistics(losses: np.ndarray) -> dict:
     """Helper function to calculate comprehensive statistics for loss distribution.
 
@@ -439,7 +353,7 @@ def _calculate_statistics(losses: np.ndarray) -> dict:
     Returns:
         dict: Statistics including mean, median, mode, std dev, and percentiles.
     """
-    mode, mode_percentage = _calculate_mode_percentage(losses)
+    mode, mode_percentage = calculate_mode(losses)
     stats_dict = {
         "Mean": np.mean(losses),
         "Median": np.median(losses),
@@ -659,7 +573,8 @@ def plot_risk_calculation_before_after(
     np.random.seed(monte_carlo_seed)
 
     # Calculate SLE and ALE
-    single_loss_expectancy, annualized_loss_expectancy = calculate_sle_ale(
+    single_loss_expectancy = calculate_sle(asset_value, exposure_factor)
+    annualized_loss_expectancy = calculate_ale(
         asset_value, exposure_factor, annual_rate_of_occurrence
     )
 
@@ -929,8 +844,8 @@ def plot_risk_calculation_before_after(
 
 def main():
     # Load data from JSON or CSV files
-    # data = load_json_data("input_example.json")
-    data = load_csv_data("input_example.csv")
+    # data = _load_json_data("input_example.json")
+    data = _load_csv_data("input_example.csv")
 
     # Plot the risk calculation for a before-and-after scenario using each item in the data
     for item in data["data"]:
